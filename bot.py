@@ -44,7 +44,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("⭐ Premium", callback_data="premium"),
         ],
         [
-            InlineKeyboardButton("📢 Advertise With Us", callback_data="advertise"),
+            InlineKeyboardButton(
+                "📢 Advertise With Us",
+                callback_data="advertise"
+            ),
         ],
     ]
 
@@ -63,13 +66,35 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     messages = {
-        "jobs": "💼 *JOBS*\n\nJob opportunities will be posted here soon.",
-        "gigs": "💻 *ONLINE GIGS*\n\nOnline work opportunities will be posted here soon.",
-        "business": "💰 *BUSINESS OPPORTUNITIES*\n\nBusiness opportunities will be posted here soon.",
-        "cars": "🚗 *CAR DEALS*\n\nCar deals and prices will be posted here soon.",
-        "electronics": "📱 *ELECTRONICS*\n\nElectronics deals will be posted here soon.",
-        "premium": "⭐ *PREMIUM*\n\nPremium alerts and exclusive opportunities will be available here.",
-        "advertise": "📢 *ADVERTISE WITH US*\n\nContact the administrator to advertise your business.",
+        "jobs": (
+            "💼 *JOBS*\n\n"
+            "Job opportunities will be posted here soon."
+        ),
+        "gigs": (
+            "💻 *ONLINE GIGS*\n\n"
+            "Online work opportunities will be posted here soon."
+        ),
+        "business": (
+            "💰 *BUSINESS OPPORTUNITIES*\n\n"
+            "Business opportunities will be posted here soon."
+        ),
+        "cars": (
+            "🚗 *CAR DEALS*\n\n"
+            "Car deals and prices will be posted here soon."
+        ),
+        "electronics": (
+            "📱 *ELECTRONICS*\n\n"
+            "Electronics deals will be posted here soon."
+        ),
+        "premium": (
+            "⭐ *PREMIUM*\n\n"
+            "Premium alerts and exclusive opportunities "
+            "will be available here."
+        ),
+        "advertise": (
+            "📢 *ADVERTISE WITH US*\n\n"
+            "Contact the administrator to advertise your business."
+        ),
     }
 
     await query.edit_message_text(
@@ -79,14 +104,20 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    threading.Thread(target=start_web_server, daemon=True).start()
+    threading.Thread(
+        target=start_web_server,
+        daemon=True
+    ).start()
 
     app = Application.builder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button))
 
     print("Bot is running...")
+
     app.run_polling()
 
-                                                        
+
 if __name__ == "__main__":
+    main()
