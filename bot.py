@@ -10,7 +10,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-TOKEN = os.environ["BOT_TOKEN"]
+TOKEN = os.environ["BOT_TOKEN"].strip()
 
 
 class HealthHandler(BaseHTTPRequestHandler):
