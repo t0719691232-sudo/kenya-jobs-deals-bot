@@ -8,14 +8,14 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
-
-# =========================
-# CONFIGURATION
-# =========================
-
 TOKEN = os.environ["BOT_TOKEN"].strip()
+
+# YOUR TELEGRAM ADMIN ID
+ADMIN_ID = 1773092768
 
 
 # =========================
@@ -47,6 +47,19 @@ def start_web_server():
 
 
 # =========================
+# LISTINGS
+# =========================
+
+LISTINGS = {
+    "jobs": [],
+    "gigs": [],
+    "business": [],
+    "cars": [],
+    "electronics": [],
+}
+
+
+# =========================
 # CATEGORY MENU
 # =========================
 
@@ -54,34 +67,16 @@ def category_keyboard():
 
     keyboard = [
         [
-            InlineKeyboardButton(
-                "💼 Jobs",
-                callback_data="jobs"
-            ),
-            InlineKeyboardButton(
-                "💻 Online Gigs",
-                callback_data="gigs"
-            ),
+            InlineKeyboardButton("💼 Jobs", callback_data="jobs"),
+            InlineKeyboardButton("💻 Online Gigs", callback_data="gigs"),
         ],
         [
-            InlineKeyboardButton(
-                "💰 Business",
-                callback_data="business"
-            ),
-            InlineKeyboardButton(
-                "🚗 Car Deals",
-                callback_data="cars"
-            ),
+            InlineKeyboardButton("💰 Business", callback_data="business"),
+            InlineKeyboardButton("🚗 Car Deals", callback_data="cars"),
         ],
         [
-            InlineKeyboardButton(
-                "📱 Electronics",
-                callback_data="electronics"
-            ),
-            InlineKeyboardButton(
-                "⭐ Premium",
-                callback_data="premium"
-            ),
+            InlineKeyboardButton("📱 Electronics", callback_data="electronics"),
+            InlineKeyboardButton("⭐ Premium", callback_data="premium"),
         ],
         [
             InlineKeyboardButton(
@@ -95,13 +90,10 @@ def category_keyboard():
 
 
 # =========================
-# START COMMAND
+# START
 # =========================
 
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "🇰🇪 *Welcome to Kenya Jobs & Deals!*\n\n"
@@ -114,138 +106,48 @@ async def start(
 
 
 # =========================
-# LISTING DATA
+# SHOW LISTINGS
 # =========================
 
-LISTINGS = {
-
-    "jobs": (
-        "💼 *LATEST JOBS*\n\n"
-
-        "1️⃣ *Sales Representative*\n"
-        "📍 Nairobi\n"
-        "💰 KSh 30,000 - 45,000\n"
-        "📝 Full-time\n\n"
-
-        "2️⃣ *Customer Service Agent*\n"
-        "📍 Nairobi\n"
-        "💰 KSh 25,000 - 35,000\n"
-        "📝 Full-time\n\n"
-
-        "3️⃣ *Office Administrator*\n"
-        "📍 Mombasa\n"
-        "💰 KSh 35,000 - 50,000\n"
-        "📝 Full-time\n\n"
-
-        "📌 More jobs will be added regularly."
-    ),
-
-    "gigs": (
-        "💻 *ONLINE GIGS*\n\n"
-
-        "1️⃣ *Data Entry*\n"
-        "💰 KSh 500 - 2,000 per task\n"
-        "🌍 Remote\n\n"
-
-        "2️⃣ *Content Writing*\n"
-        "💰 KSh 1,000 - 5,000 per article\n"
-        "🌍 Remote\n\n"
-
-        "3️⃣ *Social Media Management*\n"
-        "💰 KSh 10,000 - 30,000/month\n"
-        "🌍 Remote\n\n"
-
-        "📌 New online opportunities coming soon."
-    ),
-
-    "business": (
-        "💰 *BUSINESS OPPORTUNITIES*\n\n"
-
-        "1️⃣ *Small Retail Business*\n"
-        "📍 Nairobi\n"
-        "💰 Starting from KSh 50,000\n\n"
-
-        "2️⃣ *Food Business Opportunity*\n"
-        "📍 Kiambu\n"
-        "💰 Starting from KSh 30,000\n\n"
-
-        "3️⃣ *Mobile Money Business*\n"
-        "📍 Various locations\n"
-        "💰 Investment varies\n\n"
-
-        "📌 Contact the advertiser for details."
-    ),
-
-    "cars": (
-        "🚗 *CAR DEALS*\n\n"
-
-        "1️⃣ *Toyota Axio*\n"
-        "📅 2018\n"
-        "💰 KSh 1,450,000\n"
-        "📍 Nairobi\n\n"
-
-        "2️⃣ *Toyota Fielder*\n"
-        "📅 2017\n"
-        "💰 KSh 1,350,000\n"
-        "📍 Nairobi\n\n"
-
-        "3️⃣ *Mazda Demio*\n"
-        "📅 2016\n"
-        "💰 KSh 850,000\n"
-        "📍 Mombasa\n\n"
-
-        "📌 Always verify the vehicle before payment."
-    ),
-
-    "electronics": (
-        "📱 *ELECTRONICS DEALS*\n\n"
-
-        "1️⃣ *Samsung Galaxy Smartphone*\n"
-        "💰 KSh 25,000\n"
-        "📍 Nairobi\n\n"
-
-        "2️⃣ *HP Laptop*\n"
-        "💰 KSh 45,000\n"
-        "📍 Nairobi\n\n"
-
-        "3️⃣ *Bluetooth Speaker*\n"
-        "💰 KSh 5,000\n"
-        "📍 Nationwide delivery\n\n"
-
-        "📌 Contact the seller for availability."
-    ),
-
-    "premium": (
-        "⭐ *PREMIUM MEMBERSHIP*\n\n"
-
-        "Get access to:\n\n"
-        "✅ Early job alerts\n"
-        "✅ Exclusive opportunities\n"
-        "✅ Premium business listings\n"
-        "✅ Special deals\n\n"
-
-        "💳 Premium membership will be available soon."
-    ),
-
-    "advertise": (
-        "📢 *ADVERTISE WITH US*\n\n"
-
-        "Do you have:\n\n"
-        "💼 A job vacancy?\n"
-        "💰 A business opportunity?\n"
-        "🚗 A car for sale?\n"
-        "📱 Electronics for sale?\n\n"
-
-        "You can advertise your listing to our audience.\n\n"
-
-        "📩 Contact the administrator to get started."
-    ),
+CATEGORY_NAMES = {
+    "jobs": "💼 JOBS",
+    "gigs": "💻 ONLINE GIGS",
+    "business": "💰 BUSINESS OPPORTUNITIES",
+    "cars": "🚗 CAR DEALS",
+    "electronics": "📱 ELECTRONICS",
 }
 
 
-# =========================
-# LISTING BUTTONS
-# =========================
+def get_listings_text(category):
+
+    listings = LISTINGS.get(category, [])
+
+    title = CATEGORY_NAMES.get(
+        category,
+        "LISTINGS"
+    )
+
+    if not listings:
+        return (
+            f"{title}\n\n"
+            "No listings available yet.\n\n"
+            "New opportunities will be posted here soon."
+        )
+
+    text = f"{title}\n\n"
+
+    for number, listing in enumerate(listings, 1):
+
+        text += (
+            f"{number}️⃣ *{listing['title']}*\n"
+            f"📍 {listing['location']}\n"
+            f"💰 {listing['price']}\n"
+            f"📞 {listing['contact']}\n"
+            f"📝 {listing['description']}\n\n"
+        )
+
+    return text
+
 
 def listing_keyboard():
 
@@ -257,6 +159,162 @@ def listing_keyboard():
             )
         ]
     ])
+
+
+# =========================
+# ADMIN MENU
+# =========================
+
+def admin_keyboard():
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "➕ Add Job",
+                callback_data="add_jobs"
+            ),
+            InlineKeyboardButton(
+                "➕ Add Gig",
+                callback_data="add_gigs"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "➕ Add Business",
+                callback_data="add_business"
+            ),
+            InlineKeyboardButton(
+                "➕ Add Car",
+                callback_data="add_cars"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "➕ Add Electronics",
+                callback_data="add_electronics"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "📋 View Jobs",
+                callback_data="view_jobs"
+            ),
+            InlineKeyboardButton(
+                "📋 View Gigs",
+                callback_data="view_gigs"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "📋 View Business",
+                callback_data="view_business"
+            ),
+            InlineKeyboardButton(
+                "📋 View Cars",
+                callback_data="view_cars"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "📋 View Electronics",
+                callback_data="view_electronics"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🔙 Main Menu",
+                callback_data="home"
+            )
+        ],
+    ]
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.effective_user.id != ADMIN_ID:
+
+        await update.message.reply_text(
+            "⛔ You are not authorized to access the admin panel."
+        )
+
+        return
+
+    await update.message.reply_text(
+        "🔐 *ADMIN PANEL*\n\n"
+        "Welcome, Admin.\n\n"
+        "Choose an action:",
+        reply_markup=admin_keyboard(),
+        parse_mode="Markdown",
+    )
+
+
+# =========================
+# ADMIN ADD LISTING
+# =========================
+
+async def admin_input(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    category = context.user_data.get("adding_category")
+
+    if not category:
+        return
+
+    text = update.message.text.strip()
+
+    lines = text.split("\n")
+
+    if len(lines) < 5:
+
+        await update.message.reply_text(
+            "❌ Please provide all 5 lines.\n\n"
+            "Use this format:\n\n"
+            "Title\n"
+            "Location\n"
+            "Price/Salary\n"
+            "Contact\n"
+            "Description\n\n"
+            "Example:\n\n"
+            "Accountant\n"
+            "Nairobi\n"
+            "KSh 50,000\n"
+            "0712345678\n"
+            "Experienced accountant needed."
+        )
+
+        return
+
+    listing = {
+        "title": lines[0].strip(),
+        "location": lines[1].strip(),
+        "price": lines[2].strip(),
+        "contact": lines[3].strip(),
+        "description": " ".join(
+            line.strip()
+            for line in lines[4:]
+        ),
+    }
+
+    LISTINGS[category].append(listing)
+
+    context.user_data.pop("adding_category", None)
+
+    await update.message.reply_text(
+        "✅ *Listing added successfully!*\n\n"
+        f"📌 {listing['title']}\n"
+        f"📍 {listing['location']}\n"
+        f"💰 {listing['price']}\n"
+        f"📞 {listing['contact']}",
+        reply_markup=admin_keyboard(),
+        parse_mode="Markdown",
+    )
 
 
 # =========================
@@ -272,8 +330,15 @@ async def button(
 
     await query.answer()
 
-    # Return to main menu
-    if query.data == "home":
+    data = query.data
+
+    # -------------------------
+    # MAIN MENU
+    # -------------------------
+
+    if data == "home":
+
+        context.user_data.pop("adding_category", None)
 
         await query.edit_message_text(
             "🇰🇪 *Kenya Jobs & Deals*\n\n"
@@ -284,17 +349,143 @@ async def button(
 
         return
 
-    # Show selected category
-    message = LISTINGS.get(
-        query.data,
-        "Please choose an option."
-    )
+    # -------------------------
+    # ADMIN PANEL
+    # -------------------------
 
-    await query.edit_message_text(
-        message,
-        reply_markup=listing_keyboard(),
-        parse_mode="Markdown",
-    )
+    if data == "admin_panel":
+
+        if query.from_user.id != ADMIN_ID:
+
+            await query.edit_message_text(
+                "⛔ Unauthorized."
+            )
+
+            return
+
+        await query.edit_message_text(
+            "🔐 *ADMIN PANEL*\n\n"
+            "Choose an action:",
+            reply_markup=admin_keyboard(),
+            parse_mode="Markdown",
+        )
+
+        return
+
+    # -------------------------
+    # ADD LISTING
+    # -------------------------
+
+    if data.startswith("add_"):
+
+        if query.from_user.id != ADMIN_ID:
+
+            await query.edit_message_text(
+                "⛔ Unauthorized."
+            )
+
+            return
+
+        category = data.replace("add_", "")
+
+        context.user_data["adding_category"] = category
+
+        await query.edit_message_text(
+            f"➕ *ADD {CATEGORY_NAMES[category]}*\n\n"
+            "Send the listing in this format:\n\n"
+            "Title\n"
+            "Location\n"
+            "Price/Salary\n"
+            "Contact\n"
+            "Description\n\n"
+            "Example:\n\n"
+            "Accountant\n"
+            "Nairobi\n"
+            "KSh 50,000\n"
+            "0712345678\n"
+            "Experienced accountant needed.",
+            parse_mode="Markdown",
+        )
+
+        return
+
+    # -------------------------
+    # VIEW LISTING
+    # -------------------------
+
+    if data.startswith("view_"):
+
+        if query.from_user.id != ADMIN_ID:
+
+            await query.edit_message_text(
+                "⛔ Unauthorized."
+            )
+
+            return
+
+        category = data.replace("view_", "")
+
+        await query.edit_message_text(
+            get_listings_text(category),
+            reply_markup=admin_keyboard(),
+            parse_mode="Markdown",
+        )
+
+        return
+
+    # -------------------------
+    # NORMAL CATEGORY
+    # -------------------------
+
+    if data in LISTINGS:
+
+        await query.edit_message_text(
+            get_listings_text(data),
+            reply_markup=listing_keyboard(),
+            parse_mode="Markdown",
+        )
+
+        return
+
+    # -------------------------
+    # PREMIUM
+    # -------------------------
+
+    if data == "premium":
+
+        await query.edit_message_text(
+            "⭐ *PREMIUM MEMBERSHIP*\n\n"
+            "Get access to:\n\n"
+            "✅ Early job alerts\n"
+            "✅ Exclusive opportunities\n"
+            "✅ Premium business listings\n"
+            "✅ Special deals\n\n"
+            "💳 Premium membership will be available soon.",
+            reply_markup=listing_keyboard(),
+            parse_mode="Markdown",
+        )
+
+        return
+
+    # -------------------------
+    # ADVERTISE
+    # -------------------------
+
+    if data == "advertise":
+
+        await query.edit_message_text(
+            "📢 *ADVERTISE WITH US*\n\n"
+            "Do you have:\n\n"
+            "💼 A job vacancy?\n"
+            "💰 A business opportunity?\n"
+            "🚗 A car for sale?\n"
+            "📱 Electronics for sale?\n\n"
+            "Contact the administrator to advertise.",
+            reply_markup=listing_keyboard(),
+            parse_mode="Markdown",
+        )
+
+        return
 
 
 # =========================
@@ -303,13 +494,11 @@ async def button(
 
 def main():
 
-    # Start Render health server
     threading.Thread(
         target=start_web_server,
         daemon=True
     ).start()
 
-    # Create Telegram application
     app = (
         Application
         .builder()
@@ -317,27 +506,33 @@ def main():
         .build()
     )
 
-    # Commands
     app.add_handler(
         CommandHandler("start", start)
     )
 
-    # Buttons
+    app.add_handler(
+        CommandHandler("admin", admin)
+    )
+
     app.add_handler(
         CallbackQueryHandler(button)
     )
 
-    print("🇰🇪 Kenya Jobs & Deals Bot is running...")
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            admin_input
+        )
+    )
 
-    # Start Telegram polling
+    print(
+        "🇰🇪 Kenya Jobs & Deals Bot is running..."
+    )
+
     app.run_polling(
         drop_pending_updates=True
     )
 
-
-# =========================
-# START PROGRAM
-# =========================
 
 if __name__ == "__main__":
     main()
