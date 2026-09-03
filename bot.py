@@ -331,6 +331,48 @@ def category_name(category):
     return names.get(category, category.title())
 
 
+def contact_button(row):
+    listing_id = row[0]
+    category = row[1]
+
+    if category in ["jobs", "gigs"]:
+        button_text = "📞 Apply / Contact"
+    else:
+        button_text = "📞 Contact Seller"
+
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    button_text,
+                    callback_data=f"contact_{listing_id}",
+                )
+            ]
+        ]
+    )
+
+
+def listing_buttons(row):
+    listing_id = row[0]
+    category = row[1]
+
+    if category in ["jobs", "gigs"]:
+        contact_text = "📞 Apply / Contact"
+    else:
+        contact_text = "📞 Contact Seller"
+
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    contact_text,
+                    callback_data=f"contact_{listing_id}",
+                )
+            ]
+        ]
+    )
+
+
 def format_listing(row):
     (
         listing_id,
@@ -352,8 +394,7 @@ def format_listing(row):
         f"🗂 Category: {category_name(category)}\n"
         f"🗺 Region: {region}\n"
         f"📍 Location: {location}\n"
-        f"💰 Price/Salary: {price}\n"
-        f"📞 Contact: {contact}\n\n"
+        f"💰 Price/Salary: {price}\n\n"
         f"📝 Description:\n{description}"
     )
 
@@ -361,6 +402,7 @@ def format_listing(row):
 async def send_listing(message, row):
     text = format_listing(row)
     photo = row[8]
+    buttons = listing_buttons(row)
 
     if photo:
         try:
@@ -368,17 +410,31 @@ async def send_listing(message, row):
                 await message.reply_photo(
                     photo=photo,
                     caption=text,
+                    reply_markup=buttons,
                 )
             else:
-                await message.reply_photo(photo=photo)
-                await message.reply_text(text)
+                await message.reply_photo(
+                    photo=photo,
+                )
+
+                await message.reply_text(
+                    text,
+                    reply_markup=buttons,
+                )
 
         except Exception as e:
             print("Photo error:", e)
-            await message.reply_text(text)
+
+            await message.reply_text(
+                text,
+                reply_markup=buttons,
+            )
 
     else:
-        await message.reply_text(text)
+        await message.reply_text(
+            text,
+            reply_markup=buttons,
+        )
 
 
 # =========================================================
@@ -773,6 +829,53 @@ async def button_handler(
         return
 
     # -----------------------------------------------------
+    # CONTACT / APPLY
+    # -----------------------------------------------------
+
+    if data.startswith("contact_"):
+        listing_id_text = data.replace(
+            "contact_",
+            "",
+        )
+
+        try:
+            listing_id = int(listing_id_text)
+
+        except ValueError:
+            await query.message.reply_text(
+                "❌ Invalid listing."
+            )
+            return
+
+        listing = get_listing(listing_id)
+
+        if not listing:
+            await query.message.reply_text(
+                "❌ This listing is no longer available."
+            )
+            return
+
+        category = listing[1]
+        title = listing[2]
+        contact = listing[5]
+
+        if category in ["jobs", "gigs"]:
+            heading = "📞 APPLY / CONTACT"
+        else:
+            heading = "📞 CONTACT SELLER"
+
+        await query.message.reply_text(
+            f"{heading}\n\n"
+            f"📌 {title}\n\n"
+            f"☎️ Contact:\n"
+            f"{contact}\n\n"
+            f"🆔 Listing #{listing_id}\n\n"
+            "Please contact the advertiser directly."
+        )
+
+        return
+
+    # -----------------------------------------------------
     # USER CATEGORY
     # -----------------------------------------------------
 
@@ -802,6 +905,7 @@ async def button_handler(
         if region_key == "all":
             listings = get_listings(category)
             region_display = "All Kenya"
+
         else:
             region_display = REGIONS.get(
                 region_key,
@@ -1155,8 +1259,7 @@ async def admin_input(
     if not is_admin(update.effective_user.id):
         return
 
-    # IMPORTANT:
-    # This handles all normal text sent by the admin.
+    # THIS IS THE IMPORTANT LINE
     text = update.message.text.strip()
 
     # -----------------------------------------------------
@@ -1164,9 +1267,6 @@ async def admin_input(
     # -----------------------------------------------------
 
     if context.user_data.get("searching"):
-
-        if text.lower() == "skip":
-            return
 
         context.user_data.pop("searching", None)
 
@@ -1212,7 +1312,9 @@ async def admin_input(
     # ADMIN STATE
     # -----------------------------------------------------
 
-    action = context.user_data.get("admin_action")
+    action = context.user_data.get(
+        "admin_action"
+    )
 
     if not action:
         return
@@ -1246,8 +1348,7 @@ async def admin_input(
                 "2. Location\n"
                 "3. Price or Salary\n"
                 "4. Contact\n"
-                "5. Description\n\n"
-                "Please try again."
+                "5. Description"
             )
             return
 
@@ -1291,9 +1392,7 @@ async def admin_input(
 
         except ValueError:
             await update.message.reply_text(
-                "❌ Please send only the listing ID number.\n\n"
-                "Example:\n"
-                "3"
+                "❌ Please send only the listing ID number."
             )
             return
 
@@ -1328,12 +1427,7 @@ async def admin_input(
 
         if len(lines) != 5:
             await update.message.reply_text(
-                "❌ Please send EXACTLY 5 lines.\n\n"
-                "1. Title\n"
-                "2. Location\n"
-                "3. Price or Salary\n"
-                "4. Contact\n"
-                "5. Description"
+                "❌ Please send EXACTLY 5 lines."
             )
             return
 
@@ -1359,7 +1453,7 @@ async def admin_input(
         return
 
     # -----------------------------------------------------
-    # EDIT PHOTO TEXT COMMAND
+    # EDIT PHOTO
     # -----------------------------------------------------
 
     if action == "edit_photo":
@@ -1370,7 +1464,9 @@ async def admin_input(
                 "editing_id"
             )
 
-            old_listing = get_listing(listing_id)
+            old_listing = get_listing(
+                listing_id
+            )
 
             if not old_listing:
                 clear_admin_state(context)
@@ -1399,8 +1495,8 @@ async def admin_input(
             return
 
         await update.message.reply_text(
-            "❌ Please send a new photo, or type "
-            "keep or remove."
+            "❌ Please send a new photo, "
+            "or type keep or remove."
         )
         return
 
@@ -1465,7 +1561,9 @@ async def photo_input(
     if not is_admin(update.effective_user.id):
         return
 
-    action = context.user_data.get("admin_action")
+    action = context.user_data.get(
+        "admin_action"
+    )
 
     if not update.message.photo:
         return
@@ -1729,7 +1827,7 @@ def main():
         )
     )
 
-    # One text handler only
+    # ONE text handler only
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -1737,7 +1835,7 @@ def main():
         )
     )
 
-    # Error handler
+    # Errors
     app.add_error_handler(
         error_handler
     )
@@ -1750,7 +1848,7 @@ def main():
 
 
 # =========================================================
-# START
+# START BOT
 # =========================================================
 
 if __name__ == "__main__":
