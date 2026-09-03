@@ -93,6 +93,13 @@ def init_database():
                 """
             )
 
+            cur.execute(
+                """
+                ALTER TABLE listings
+                ADD COLUMN IF NOT EXISTS user_id BIGINT
+                """
+            )
+
         conn.commit()
 
     print("Database ready.")
@@ -112,6 +119,7 @@ def add_listing(
     description,
     photo=None,
     status="approved",
+    user_id=None,
 ):
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -127,9 +135,10 @@ def add_listing(
                     contact,
                     description,
                     photo,
-                    status
+                    status,
+                    user_id
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
@@ -142,6 +151,7 @@ def add_listing(
                     description,
                     photo,
                     status,
+                    user_id,
                 ),
             )
 
@@ -171,7 +181,8 @@ def get_listing(listing_id):
                     description,
                     region,
                     photo,
-                    status
+                    status,
+                    user_id
                 FROM listings
                 WHERE id = %s
                 """,
@@ -202,7 +213,8 @@ def get_listings(category, region=None):
                         description,
                         region,
                         photo,
-                        status
+                        status,
+                        user_id
                     FROM listings
                     WHERE category = %s
                     AND region = %s
@@ -225,7 +237,8 @@ def get_listings(category, region=None):
                         description,
                         region,
                         photo,
-                        status
+                        status,
+                        user_id
                     FROM listings
                     WHERE category = %s
                     AND status = 'approved'
@@ -258,7 +271,8 @@ def search_listings(search_text):
                     description,
                     region,
                     photo,
-                    status
+                    status,
+                    user_id
                 FROM listings
                 WHERE status = 'approved'
                 AND (
@@ -302,7 +316,8 @@ def get_pending_listings():
                     description,
                     region,
                     photo,
-                    status
+                    status,
+                    user_id
                 FROM listings
                 WHERE status = 'pending'
                 ORDER BY id ASC
@@ -324,11 +339,16 @@ def approve_listing(listing_id):
                 UPDATE listings
                 SET status = 'approved'
                 WHERE id = %s
+                  AND status = 'pending'
+                RETURNING user_id
                 """,
                 (listing_id,),
             )
+            row = cur.fetchone()
 
         conn.commit()
+
+    return row[0] if row else None
 
 
 # =========================================================
@@ -343,11 +363,16 @@ def reject_listing(listing_id):
                 UPDATE listings
                 SET status = 'rejected'
                 WHERE id = %s
+                  AND status = 'pending'
+                RETURNING user_id
                 """,
                 (listing_id,),
             )
+            row = cur.fetchone()
 
         conn.commit()
+
+    return row[0] if row else None
 
 
 # =========================================================
@@ -1331,13 +1356,27 @@ async def button_handler(
             )
             return
 
-        approve_listing(listing_id)
+        advertiser_user_id = approve_listing(listing_id)
 
         await query.edit_message_text(
             f"✅ Listing #{listing_id} APPROVED.\n\n"
             f"📌 {listing[2]}\n\n"
             "It is now visible to users."
         )
+
+        if advertiser_user_id:
+            try:
+                await context.bot.send_message(
+                    chat_id=advertiser_user_id,
+                    text=(
+                        "🎉 AD APPROVED!\n\n"
+                        f"Your advert “{listing[2]}” has been approved "
+                        "and is now live on Kenya Jobs & Deals Bot. 🇰🇪\n\n"
+                        "Thank you for advertising with us!"
+                    ),
+                )
+            except Exception as e:
+                print("Advertiser approval notification error:", e)
 
         return
 
@@ -1368,13 +1407,28 @@ async def button_handler(
             )
             return
 
-        reject_listing(listing_id)
+        advertiser_user_id = reject_listing(listing_id)
 
         await query.edit_message_text(
             f"❌ Listing #{listing_id} REJECTED.\n\n"
             f"📌 {listing[2]}\n\n"
             "It will not appear to users."
         )
+
+        if advertiser_user_id:
+            try:
+                await context.bot.send_message(
+                    chat_id=advertiser_user_id,
+                    text=(
+                        "❌ AD NOT APPROVED\n\n"
+                        f"Unfortunately, your advert “{listing[2]}” "
+                        "was not approved at this time.\n\n"
+                        "Please contact the administrator if you need "
+                        "more information."
+                    ),
+                )
+            except Exception as e:
+                print("Advertiser rejection notification error:", e)
 
         return
 
@@ -1600,6 +1654,19 @@ async def text_input(
     # =====================================================
 
     if context.user_data.get("advertising"):
+
+        if context.user_data.get("admin_action") == "advertiser_photo":
+            if text.lower() == "skip":
+                await save_advertiser_submission(
+                    update,
+                    context,
+                    None,
+                )
+            else:
+                await update.message.reply_text(
+                    "📸 Please send a photo or type skip."
+                )
+            return
 
         if not context.user_data.get(
             "advertiser_data"
@@ -2088,6 +2155,7 @@ async def save_advertiser_submission(
             description=data["description"],
             photo=photo,
             status="pending",
+            user_id=update.effective_user.id,
         )
 
     except Exception as e:
