@@ -84,10 +84,23 @@ def init_database():
                 """
             )
 
+            # NEW:
+            # Listings submitted by users start as pending.
+            cur.execute(
+                """
+                ALTER TABLE listings
+                ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'approved'
+                """
+            )
+
         conn.commit()
 
     print("Database ready.")
 
+
+# =========================================================
+# ADD LISTING
+# =========================================================
 
 def add_listing(
     category,
@@ -98,6 +111,7 @@ def add_listing(
     contact,
     description,
     photo=None,
+    status="approved",
 ):
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -112,9 +126,10 @@ def add_listing(
                     price,
                     contact,
                     description,
-                    photo
+                    photo,
+                    status
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
@@ -126,6 +141,7 @@ def add_listing(
                     contact,
                     description,
                     photo,
+                    status,
                 ),
             )
 
@@ -135,6 +151,10 @@ def add_listing(
 
     return listing_id
 
+
+# =========================================================
+# GET ONE LISTING
+# =========================================================
 
 def get_listing(listing_id):
     with get_connection() as conn:
@@ -150,7 +170,8 @@ def get_listing(listing_id):
                     contact,
                     description,
                     region,
-                    photo
+                    photo,
+                    status
                 FROM listings
                 WHERE id = %s
                 """,
@@ -159,6 +180,10 @@ def get_listing(listing_id):
 
             return cur.fetchone()
 
+
+# =========================================================
+# GET LISTINGS
+# =========================================================
 
 def get_listings(category, region=None):
     with get_connection() as conn:
@@ -176,14 +201,17 @@ def get_listings(category, region=None):
                         contact,
                         description,
                         region,
-                        photo
+                        photo,
+                        status
                     FROM listings
                     WHERE category = %s
                     AND region = %s
+                    AND status = 'approved'
                     ORDER BY id DESC
                     """,
                     (category, region),
                 )
+
             else:
                 cur.execute(
                     """
@@ -196,9 +224,11 @@ def get_listings(category, region=None):
                         contact,
                         description,
                         region,
-                        photo
+                        photo,
+                        status
                     FROM listings
                     WHERE category = %s
+                    AND status = 'approved'
                     ORDER BY id DESC
                     """,
                     (category,),
@@ -206,6 +236,10 @@ def get_listings(category, region=None):
 
             return cur.fetchall()
 
+
+# =========================================================
+# SEARCH
+# =========================================================
 
 def search_listings(search_text):
     search_pattern = f"%{search_text}%"
@@ -223,14 +257,17 @@ def search_listings(search_text):
                     contact,
                     description,
                     region,
-                    photo
+                    photo,
+                    status
                 FROM listings
-                WHERE
+                WHERE status = 'approved'
+                AND (
                     title ILIKE %s
                     OR location ILIKE %s
                     OR description ILIKE %s
                     OR category ILIKE %s
                     OR region ILIKE %s
+                )
                 ORDER BY id DESC
                 LIMIT 30
                 """,
@@ -245,6 +282,77 @@ def search_listings(search_text):
 
             return cur.fetchall()
 
+
+# =========================================================
+# GET PENDING LISTINGS
+# =========================================================
+
+def get_pending_listings():
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    category,
+                    title,
+                    location,
+                    price,
+                    contact,
+                    description,
+                    region,
+                    photo,
+                    status
+                FROM listings
+                WHERE status = 'pending'
+                ORDER BY id ASC
+                """
+            )
+
+            return cur.fetchall()
+
+
+# =========================================================
+# APPROVE LISTING
+# =========================================================
+
+def approve_listing(listing_id):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE listings
+                SET status = 'approved'
+                WHERE id = %s
+                """,
+                (listing_id,),
+            )
+
+        conn.commit()
+
+
+# =========================================================
+# REJECT LISTING
+# =========================================================
+
+def reject_listing(listing_id):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE listings
+                SET status = 'rejected'
+                WHERE id = %s
+                """,
+                (listing_id,),
+            )
+
+        conn.commit()
+
+
+# =========================================================
+# UPDATE LISTING
+# =========================================================
 
 def update_listing(
     listing_id,
@@ -286,6 +394,10 @@ def update_listing(
         conn.commit()
 
 
+# =========================================================
+# DELETE LISTING
+# =========================================================
+
 def delete_listing(listing_id):
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -301,22 +413,32 @@ def delete_listing(listing_id):
 
 
 # =========================================================
-# HELPER FUNCTIONS
+# HELPERS
 # =========================================================
 
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
 
-def clear_admin_state(context):
-    context.user_data.pop("admin_action", None)
-    context.user_data.pop("category", None)
-    context.user_data.pop("region", None)
-    context.user_data.pop("listing_data", None)
-    context.user_data.pop("editing_id", None)
-    context.user_data.pop("editing_region", None)
-    context.user_data.pop("editing_data", None)
-    context.user_data.pop("delete_id", None)
+def clear_state(context):
+    keys = [
+        "admin_action",
+        "category",
+        "region",
+        "listing_data",
+        "editing_id",
+        "editing_region",
+        "editing_data",
+        "delete_id",
+        "searching",
+        "advertising",
+        "advertiser_category",
+        "advertiser_region",
+        "advertiser_data",
+    ]
+
+    for key in keys:
+        context.user_data.pop(key, None)
 
 
 def category_name(category):
@@ -331,7 +453,31 @@ def category_name(category):
     return names.get(category, category.title())
 
 
-def contact_button(row):
+# =========================================================
+# LISTING DISPLAY
+# =========================================================
+
+def format_listing(row):
+    listing_id = row[0]
+    category = row[1]
+    title = row[2]
+    location = row[3]
+    price = row[4]
+    description = row[6]
+    region = row[7] or "Other"
+
+    return (
+        f"🆔 Listing #{listing_id}\n\n"
+        f"📌 {title}\n\n"
+        f"🗂 Category: {category_name(category)}\n"
+        f"🗺 Region: {region}\n"
+        f"📍 Location: {location}\n"
+        f"💰 Price/Salary: {price}\n\n"
+        f"📝 Description:\n{description}"
+    )
+
+
+def listing_buttons(row):
     listing_id = row[0]
     category = row[1]
 
@@ -352,53 +498,6 @@ def contact_button(row):
     )
 
 
-def listing_buttons(row):
-    listing_id = row[0]
-    category = row[1]
-
-    if category in ["jobs", "gigs"]:
-        contact_text = "📞 Apply / Contact"
-    else:
-        contact_text = "📞 Contact Seller"
-
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    contact_text,
-                    callback_data=f"contact_{listing_id}",
-                )
-            ]
-        ]
-    )
-
-
-def format_listing(row):
-    (
-        listing_id,
-        category,
-        title,
-        location,
-        price,
-        contact,
-        description,
-        region,
-        photo,
-    ) = row
-
-    region = region or "Other"
-
-    return (
-        f"🆔 Listing #{listing_id}\n\n"
-        f"📌 {title}\n\n"
-        f"🗂 Category: {category_name(category)}\n"
-        f"🗺 Region: {region}\n"
-        f"📍 Location: {location}\n"
-        f"💰 Price/Salary: {price}\n\n"
-        f"📝 Description:\n{description}"
-    )
-
-
 async def send_listing(message, row):
     text = format_listing(row)
     photo = row[8]
@@ -414,7 +513,7 @@ async def send_listing(message, row):
                 )
             else:
                 await message.reply_photo(
-                    photo=photo,
+                    photo=photo
                 )
 
                 await message.reply_text(
@@ -562,7 +661,7 @@ def region_menu(category):
 
 
 # =========================================================
-# ADMIN MENUS
+# ADMIN MENU
 # =========================================================
 
 def admin_menu():
@@ -571,6 +670,12 @@ def admin_menu():
             InlineKeyboardButton(
                 "➕ Add Listing",
                 callback_data="admin_add",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📥 Pending Ads",
+                callback_data="pending_ads",
             )
         ],
         [
@@ -723,9 +828,7 @@ def admin_region_menu(prefix):
 # =========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    clear_admin_state(context)
-
-    context.user_data.pop("searching", None)
+    clear_state(context)
 
     await update.message.reply_text(
         "🇰🇪 Welcome to Kenya Jobs & Deals Bot!\n\n"
@@ -737,7 +840,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================================================
-# ADMIN
+# ADMIN COMMAND
 # =========================================================
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -747,7 +850,7 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    clear_admin_state(context)
+    clear_state(context)
 
     await update.message.reply_text(
         "🔐 ADMIN PANEL\n\n"
@@ -761,8 +864,7 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================================================
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    clear_admin_state(context)
-    context.user_data.pop("searching", None)
+    clear_state(context)
 
     if is_admin(update.effective_user.id):
         await update.message.reply_text(
@@ -771,7 +873,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await update.message.reply_text(
-            "❌ Search/action cancelled.",
+            "❌ Action cancelled.",
             reply_markup=main_menu(),
         )
 
@@ -795,8 +897,7 @@ async def button_handler(
     # -----------------------------------------------------
 
     if data == "main_menu":
-        clear_admin_state(context)
-        context.user_data.pop("searching", None)
+        clear_state(context)
 
         await query.edit_message_text(
             "🇰🇪 Kenya Jobs & Deals Bot\n\n"
@@ -810,7 +911,7 @@ async def button_handler(
     # -----------------------------------------------------
 
     if data == "search":
-        clear_admin_state(context)
+        clear_state(context)
 
         context.user_data["searching"] = True
 
@@ -825,6 +926,116 @@ async def button_handler(
             "• Toyota\n"
             "• Online work\n\n"
             "Type /cancel to stop."
+        )
+        return
+
+    # -----------------------------------------------------
+    # ADVERTISE WITH US
+    # -----------------------------------------------------
+
+    if data == "advertise":
+        clear_state(context)
+
+        context.user_data["advertising"] = True
+
+        await query.edit_message_text(
+            "📢 ADVERTISE WITH US\n\n"
+            "Submit your job, business, car or electronics advert.\n\n"
+            "Your advert will be reviewed by our admin before "
+            "it becomes visible to everyone.\n\n"
+            "Choose a category:",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "💼 Jobs",
+                            callback_data="advertise_jobs",
+                        ),
+                        InlineKeyboardButton(
+                            "💻 Online Gigs",
+                            callback_data="advertise_gigs",
+                        ),
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "💰 Business",
+                            callback_data="advertise_business",
+                        ),
+                        InlineKeyboardButton(
+                            "🚗 Car Deals",
+                            callback_data="advertise_cars",
+                        ),
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "📱 Electronics",
+                            callback_data="advertise_electronics",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "❌ Cancel",
+                            callback_data="cancel_action",
+                        )
+                    ],
+                ]
+            ),
+        )
+        return
+
+    # -----------------------------------------------------
+    # ADVERTISER CATEGORY
+    # -----------------------------------------------------
+
+    if data.startswith("advertise_"):
+        category = data.replace(
+            "advertise_",
+            "",
+        )
+
+        context.user_data["advertiser_category"] = category
+
+        await query.edit_message_text(
+            f"📢 {category_name(category)}\n\n"
+            "Choose the region:",
+            reply_markup=admin_region_menu(
+                "advertiseregion"
+            ),
+        )
+        return
+
+    # -----------------------------------------------------
+    # ADVERTISER REGION
+    # -----------------------------------------------------
+
+    if data.startswith("advertiseregion_"):
+        region_key = data.replace(
+            "advertiseregion_",
+            "",
+        )
+
+        region = REGIONS.get(
+            region_key,
+            "Other",
+        )
+
+        context.user_data["advertiser_region"] = region
+        context.user_data["advertising"] = True
+
+        await query.edit_message_text(
+            f"🗺 Region: {region}\n\n"
+            "Now send your advert details in EXACTLY 5 lines:\n\n"
+            "1. Title\n"
+            "2. Location\n"
+            "3. Price or Salary\n"
+            "4. Contact\n"
+            "5. Description\n\n"
+            "Example:\n\n"
+            "Accountant Needed\n"
+            "Westlands, Nairobi\n"
+            "KSh 50,000 per month\n"
+            "0712345678\n"
+            "Looking for an experienced accountant."
         )
         return
 
@@ -905,7 +1116,6 @@ async def button_handler(
         if region_key == "all":
             listings = get_listings(category)
             region_display = "All Kenya"
-
         else:
             region_display = REGIONS.get(
                 region_key,
@@ -944,7 +1154,7 @@ async def button_handler(
                 [
                     [
                         InlineKeyboardButton(
-                            "🔎 Choose Another Region",
+                            "🔎 Another Region",
                             callback_data=f"category_{category}",
                         )
                     ],
@@ -988,29 +1198,6 @@ async def button_handler(
         )
         return
 
-    # -----------------------------------------------------
-    # ADVERTISE
-    # -----------------------------------------------------
-
-    if data == "advertise":
-        await query.edit_message_text(
-            "📢 ADVERTISE WITH US\n\n"
-            "Businesses and advertisers will be able to submit "
-            "their adverts here.\n\n"
-            "This feature will be added next.",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "🏠 Main Menu",
-                            callback_data="main_menu",
-                        )
-                    ]
-                ]
-            ),
-        )
-        return
-
     # =====================================================
     # ADMIN ONLY
     # =====================================================
@@ -1026,7 +1213,7 @@ async def button_handler(
     # -----------------------------------------------------
 
     if data == "cancel_action":
-        clear_admin_state(context)
+        clear_state(context)
 
         await query.edit_message_text(
             "❌ Action cancelled.\n\n"
@@ -1036,11 +1223,167 @@ async def button_handler(
         return
 
     # -----------------------------------------------------
-    # ADD LISTING
+    # PENDING ADS
+    # -----------------------------------------------------
+
+    if data == "pending_ads":
+        pending = get_pending_listings()
+
+        if not pending:
+            await query.edit_message_text(
+                "📥 PENDING ADS\n\n"
+                "There are no adverts waiting for approval.",
+                reply_markup=admin_menu(),
+            )
+            return
+
+        await query.edit_message_text(
+            f"📥 PENDING ADS\n\n"
+            f"{len(pending)} advert(s) waiting for approval."
+        )
+
+        for listing in pending:
+
+            text = (
+                "📥 NEW ADVERT\n\n"
+                f"{format_listing(listing)}\n\n"
+                "Choose an action:"
+            )
+
+            buttons = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "✅ Approve",
+                            callback_data=f"approve_{listing[0]}",
+                        ),
+                        InlineKeyboardButton(
+                            "❌ Reject",
+                            callback_data=f"reject_{listing[0]}",
+                        ),
+                    ]
+                ]
+            )
+
+            if listing[8]:
+                try:
+                    if len(text) <= 1000:
+                        await query.message.reply_photo(
+                            photo=listing[8],
+                            caption=text,
+                            reply_markup=buttons,
+                        )
+                    else:
+                        await query.message.reply_photo(
+                            photo=listing[8]
+                        )
+
+                        await query.message.reply_text(
+                            text,
+                            reply_markup=buttons,
+                        )
+
+                except Exception as e:
+                    print("Pending photo error:", e)
+
+                    await query.message.reply_text(
+                        text,
+                        reply_markup=buttons,
+                    )
+
+            else:
+                await query.message.reply_text(
+                    text,
+                    reply_markup=buttons,
+                )
+
+        await query.message.reply_text(
+            "🔐 Admin Panel",
+            reply_markup=admin_menu(),
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # APPROVE
+    # -----------------------------------------------------
+
+    if data.startswith("approve_"):
+        listing_id_text = data.replace(
+            "approve_",
+            "",
+        )
+
+        try:
+            listing_id = int(listing_id_text)
+
+        except ValueError:
+            await query.message.reply_text(
+                "❌ Invalid listing ID."
+            )
+            return
+
+        listing = get_listing(listing_id)
+
+        if not listing:
+            await query.edit_message_text(
+                "❌ Listing not found."
+            )
+            return
+
+        approve_listing(listing_id)
+
+        await query.edit_message_text(
+            f"✅ Listing #{listing_id} APPROVED.\n\n"
+            f"📌 {listing[2]}\n\n"
+            "It is now visible to users."
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # REJECT
+    # -----------------------------------------------------
+
+    if data.startswith("reject_"):
+        listing_id_text = data.replace(
+            "reject_",
+            "",
+        )
+
+        try:
+            listing_id = int(listing_id_text)
+
+        except ValueError:
+            await query.message.reply_text(
+                "❌ Invalid listing ID."
+            )
+            return
+
+        listing = get_listing(listing_id)
+
+        if not listing:
+            await query.edit_message_text(
+                "❌ Listing not found."
+            )
+            return
+
+        reject_listing(listing_id)
+
+        await query.edit_message_text(
+            f"❌ Listing #{listing_id} REJECTED.\n\n"
+            f"📌 {listing[2]}\n\n"
+            "It will not appear to users."
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # ADMIN ADD
     # -----------------------------------------------------
 
     if data == "admin_add":
-        clear_admin_state(context)
+        clear_state(context)
 
         await query.edit_message_text(
             "➕ ADD LISTING\n\n"
@@ -1050,7 +1393,7 @@ async def button_handler(
         return
 
     # -----------------------------------------------------
-    # SELECT ADD CATEGORY
+    # ADMIN ADD CATEGORY
     # -----------------------------------------------------
 
     if data.startswith("add_"):
@@ -1065,12 +1408,14 @@ async def button_handler(
         await query.edit_message_text(
             f"➕ Add to {category_name(category)}\n\n"
             "Choose the region:",
-            reply_markup=admin_region_menu("addregion"),
+            reply_markup=admin_region_menu(
+                "addregion"
+            ),
         )
         return
 
     # -----------------------------------------------------
-    # SELECT ADD REGION
+    # ADMIN ADD REGION
     # -----------------------------------------------------
 
     if data.startswith("addregion_"):
@@ -1089,18 +1434,12 @@ async def button_handler(
 
         await query.edit_message_text(
             f"🗺 Region: {region}\n\n"
-            "Now send the listing details in EXACTLY 5 lines:\n\n"
+            "Send the listing details in EXACTLY 5 lines:\n\n"
             "1. Title\n"
             "2. Location\n"
             "3. Price or Salary\n"
             "4. Contact\n"
-            "5. Description\n\n"
-            "Example:\n\n"
-            "Accountant\n"
-            "Westlands, Nairobi\n"
-            "KSh 50,000 per month\n"
-            "0712345678\n"
-            "Looking for an experienced accountant."
+            "5. Description"
         )
         return
 
@@ -1147,7 +1486,7 @@ async def button_handler(
     # -----------------------------------------------------
 
     if data == "admin_edit":
-        clear_admin_state(context)
+        clear_state(context)
 
         context.user_data["admin_action"] = "edit_id"
 
@@ -1180,7 +1519,7 @@ async def button_handler(
 
         await query.edit_message_text(
             f"🗺 New region: {region}\n\n"
-            "Now send the updated listing details in EXACTLY 5 lines:\n\n"
+            "Send the updated listing details in EXACTLY 5 lines:\n\n"
             "1. Title\n"
             "2. Location\n"
             "3. Price or Salary\n"
@@ -1194,7 +1533,7 @@ async def button_handler(
     # -----------------------------------------------------
 
     if data == "admin_delete":
-        clear_admin_state(context)
+        clear_state(context)
 
         context.user_data["admin_action"] = "delete_id"
 
@@ -1202,8 +1541,7 @@ async def button_handler(
             "🗑 DELETE LISTING\n\n"
             "Send the ID number of the listing you want to delete.\n\n"
             "Example:\n"
-            "3\n\n"
-            "Use /cancel to cancel."
+            "3"
         )
         return
 
@@ -1229,8 +1567,6 @@ async def button_handler(
         listing = get_listing(listing_id)
 
         if not listing:
-            clear_admin_state(context)
-
             await query.edit_message_text(
                 "❌ Listing not found.",
                 reply_markup=admin_menu(),
@@ -1239,36 +1575,78 @@ async def button_handler(
 
         delete_listing(listing_id)
 
-        clear_admin_state(context)
+        clear_state(context)
 
         await query.edit_message_text(
             f"✅ Listing #{listing_id} deleted successfully.",
             reply_markup=admin_menu(),
         )
+
         return
 
 
 # =========================================================
-# ADMIN TEXT INPUT
+# TEXT INPUT
 # =========================================================
 
-async def admin_input(
+async def text_input(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    if not is_admin(update.effective_user.id):
-        return
-
-    # THIS IS THE IMPORTANT LINE
     text = update.message.text.strip()
 
-    # -----------------------------------------------------
+    # =====================================================
+    # ADVERTISER SUBMISSION
+    # =====================================================
+
+    if context.user_data.get("advertising"):
+
+        if not context.user_data.get(
+            "advertiser_data"
+        ):
+
+            lines = text.splitlines()
+
+            if len(lines) != 5:
+                await update.message.reply_text(
+                    "❌ Please send EXACTLY 5 lines:\n\n"
+                    "1. Title\n"
+                    "2. Location\n"
+                    "3. Price or Salary\n"
+                    "4. Contact\n"
+                    "5. Description"
+                )
+                return
+
+            context.user_data["advertiser_data"] = {
+                "title": lines[0].strip(),
+                "location": lines[1].strip(),
+                "price": lines[2].strip(),
+                "contact": lines[3].strip(),
+                "description": lines[4].strip(),
+            }
+
+            context.user_data["admin_action"] = "advertiser_photo"
+
+            await update.message.reply_text(
+                "📸 PHOTO\n\n"
+                "Send a photo for your advert.\n\n"
+                "If you don't want a photo, type:\n\n"
+                "skip"
+            )
+
+            return
+
+    # =====================================================
     # SEARCH
-    # -----------------------------------------------------
+    # =====================================================
 
     if context.user_data.get("searching"):
 
-        context.user_data.pop("searching", None)
+        context.user_data.pop(
+            "searching",
+            None,
+        )
 
         try:
             listings = search_listings(text)
@@ -1277,7 +1655,7 @@ async def admin_input(
             print("Search error:", e)
 
             await update.message.reply_text(
-                "❌ There was a database error while searching."
+                "❌ Search database error."
             )
             return
 
@@ -1308,9 +1686,12 @@ async def admin_input(
 
         return
 
-    # -----------------------------------------------------
-    # ADMIN STATE
-    # -----------------------------------------------------
+    # =====================================================
+    # ADMIN TEXT
+    # =====================================================
+
+    if not is_admin(update.effective_user.id):
+        return
 
     action = context.user_data.get(
         "admin_action"
@@ -1320,35 +1701,16 @@ async def admin_input(
         return
 
     # -----------------------------------------------------
-    # SKIP PHOTO
-    # -----------------------------------------------------
-
-    if (
-        text.lower() == "skip"
-        and action == "waiting_photo"
-    ):
-        await save_new_listing(
-            update,
-            context,
-            photo=None,
-        )
-        return
-
-    # -----------------------------------------------------
-    # ADD DETAILS
+    # ADMIN ADD DETAILS
     # -----------------------------------------------------
 
     if action == "add_details":
+
         lines = text.splitlines()
 
         if len(lines) != 5:
             await update.message.reply_text(
-                "❌ Please send EXACTLY 5 lines.\n\n"
-                "1. Title\n"
-                "2. Location\n"
-                "3. Price or Salary\n"
-                "4. Contact\n"
-                "5. Description"
+                "❌ Please send EXACTLY 5 lines."
             )
             return
 
@@ -1364,22 +1726,30 @@ async def admin_input(
 
         await update.message.reply_text(
             "📸 PHOTO\n\n"
-            "Now send a photo for this listing.\n\n"
-            "If you do NOT want a photo, type:\n\n"
-            "skip"
-        )
-        return
-
-    # -----------------------------------------------------
-    # WAITING FOR PHOTO
-    # -----------------------------------------------------
-
-    if action == "waiting_photo":
-        await update.message.reply_text(
-            "📸 Please send a photo.\n\n"
+            "Send a photo for this listing.\n\n"
             "Or type:\n"
             "skip"
         )
+
+        return
+
+    # -----------------------------------------------------
+    # ADMIN SKIP PHOTO
+    # -----------------------------------------------------
+
+    if action == "waiting_photo":
+
+        if text.lower() == "skip":
+            await save_admin_listing(
+                update,
+                context,
+                None,
+            )
+        else:
+            await update.message.reply_text(
+                "📸 Please send a photo or type skip."
+            )
+
         return
 
     # -----------------------------------------------------
@@ -1387,12 +1757,13 @@ async def admin_input(
     # -----------------------------------------------------
 
     if action == "edit_id":
+
         try:
             listing_id = int(text)
 
         except ValueError:
             await update.message.reply_text(
-                "❌ Please send only the listing ID number."
+                "❌ Please send only the listing ID."
             )
             return
 
@@ -1400,22 +1771,23 @@ async def admin_input(
 
         if not listing:
             await update.message.reply_text(
-                f"❌ Listing #{listing_id} was not found."
+                "❌ Listing not found."
             )
             return
 
         context.user_data["editing_id"] = listing_id
         context.user_data["admin_action"] = "edit_region"
 
-        current_region = listing[7] or "Other"
-
         await update.message.reply_text(
             f"✏️ Editing listing #{listing_id}\n\n"
             f"Current title: {listing[2]}\n"
-            f"Current region: {current_region}\n\n"
+            f"Current region: {listing[7] or 'Other'}\n\n"
             "Choose the new region:",
-            reply_markup=admin_region_menu("editregion"),
+            reply_markup=admin_region_menu(
+                "editregion"
+            ),
         )
+
         return
 
     # -----------------------------------------------------
@@ -1423,6 +1795,7 @@ async def admin_input(
     # -----------------------------------------------------
 
     if action == "edit_details":
+
         lines = text.splitlines()
 
         if len(lines) != 5:
@@ -1445,11 +1818,12 @@ async def admin_input(
             "📸 EDIT PHOTO\n\n"
             "Send a NEW photo, or type:\n\n"
             "keep\n\n"
-            "to keep the existing photo.\n\n"
+            "to keep the current photo.\n\n"
             "Or type:\n\n"
             "remove\n\n"
-            "to remove the photo."
+            "to remove it."
         )
+
         return
 
     # -----------------------------------------------------
@@ -1457,47 +1831,45 @@ async def admin_input(
     # -----------------------------------------------------
 
     if action == "edit_photo":
-        command = text.lower()
 
-        if command == "keep":
+        if text.lower() == "keep":
+
             listing_id = context.user_data.get(
                 "editing_id"
             )
 
-            old_listing = get_listing(
+            listing = get_listing(
                 listing_id
             )
 
-            if not old_listing:
-                clear_admin_state(context)
-
+            if not listing:
                 await update.message.reply_text(
-                    "❌ Listing no longer exists.",
-                    reply_markup=admin_menu(),
+                    "❌ Listing not found."
                 )
                 return
-
-            old_photo = old_listing[8]
 
             await save_edited_listing(
                 update,
                 context,
-                old_photo,
+                listing[8],
             )
+
             return
 
-        if command == "remove":
+        if text.lower() == "remove":
+
             await save_edited_listing(
                 update,
                 context,
                 None,
             )
+
             return
 
         await update.message.reply_text(
-            "❌ Please send a new photo, "
-            "or type keep or remove."
+            "❌ Send a new photo, or type keep or remove."
         )
+
         return
 
     # -----------------------------------------------------
@@ -1505,12 +1877,13 @@ async def admin_input(
     # -----------------------------------------------------
 
     if action == "delete_id":
+
         try:
             listing_id = int(text)
 
         except ValueError:
             await update.message.reply_text(
-                "❌ Please send only the listing ID number."
+                "❌ Please send only the listing ID."
             )
             return
 
@@ -1518,7 +1891,7 @@ async def admin_input(
 
         if not listing:
             await update.message.reply_text(
-                f"❌ Listing #{listing_id} was not found."
+                "❌ Listing not found."
             )
             return
 
@@ -1547,6 +1920,7 @@ async def admin_input(
                 ]
             ),
         )
+
         return
 
 
@@ -1558,6 +1932,27 @@ async def photo_input(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    photo_file_id = update.message.photo[-1].file_id
+
+    # -----------------------------------------------------
+    # ADVERTISER PHOTO
+    # -----------------------------------------------------
+
+    if context.user_data.get(
+        "advertising"
+    ):
+        await save_advertiser_submission(
+            update,
+            context,
+            photo_file_id,
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # ADMIN PHOTO
+    # -----------------------------------------------------
+
     if not is_admin(update.effective_user.id):
         return
 
@@ -1565,42 +1960,35 @@ async def photo_input(
         "admin_action"
     )
 
-    if not update.message.photo:
-        return
-
-    photo_file_id = update.message.photo[-1].file_id
-
-    # New listing
     if action == "waiting_photo":
-        await save_new_listing(
+
+        await save_admin_listing(
             update,
             context,
             photo_file_id,
         )
+
         return
 
-    # Edited listing
     if action == "edit_photo":
+
         await save_edited_listing(
             update,
             context,
             photo_file_id,
         )
+
         return
 
-    await update.message.reply_text(
-        "I am not waiting for a photo right now."
-    )
-
 
 # =========================================================
-# SAVE NEW LISTING
+# SAVE ADMIN LISTING
 # =========================================================
 
-async def save_new_listing(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    photo=None,
+async def save_admin_listing(
+    update,
+    context,
+    photo,
 ):
     category = context.user_data.get(
         "category"
@@ -1615,12 +2003,13 @@ async def save_new_listing(
     )
 
     if not category or not region or not data:
-        clear_admin_state(context)
+        clear_state(context)
 
         await update.message.reply_text(
             "❌ Something went wrong.\n\n"
             "Please start again with /admin."
         )
+
         return
 
     try:
@@ -1633,17 +2022,19 @@ async def save_new_listing(
             contact=data["contact"],
             description=data["description"],
             photo=photo,
+            status="approved",
         )
 
     except Exception as e:
-        print("Error adding listing:", e)
+        print("Admin listing error:", e)
 
         await update.message.reply_text(
-            "❌ Database error while saving the listing."
+            "❌ Database error."
         )
+
         return
 
-    clear_admin_state(context)
+    clear_state(context)
 
     await update.message.reply_text(
         f"✅ LISTING ADDED SUCCESSFULLY!\n\n"
@@ -1656,12 +2047,108 @@ async def save_new_listing(
 
 
 # =========================================================
+# SAVE ADVERTISER SUBMISSION
+# =========================================================
+
+async def save_advertiser_submission(
+    update,
+    context,
+    photo,
+):
+    category = context.user_data.get(
+        "advertiser_category"
+    )
+
+    region = context.user_data.get(
+        "advertiser_region"
+    )
+
+    data = context.user_data.get(
+        "advertiser_data"
+    )
+
+    if not category or not region or not data:
+        clear_state(context)
+
+        await update.message.reply_text(
+            "❌ Something went wrong.\n\n"
+            "Please start again."
+        )
+
+        return
+
+    try:
+        listing_id = add_listing(
+            category=category,
+            region=region,
+            title=data["title"],
+            location=data["location"],
+            price=data["price"],
+            contact=data["contact"],
+            description=data["description"],
+            photo=photo,
+            status="pending",
+        )
+
+    except Exception as e:
+        print(
+            "Advertiser submission error:",
+            e,
+        )
+
+        await update.message.reply_text(
+            "❌ There was a database error.\n\n"
+            "Please try again later."
+        )
+
+        return
+
+    # Send notification to admin
+    try:
+
+        admin_text = (
+            "📥 NEW ADVERT SUBMITTED!\n\n"
+            f"🆔 Listing #{listing_id}\n"
+            f"🗂 Category: {category_name(category)}\n"
+            f"🗺 Region: {region}\n"
+            f"📌 {data['title']}\n"
+            f"📍 {data['location']}\n"
+            f"💰 {data['price']}\n"
+            f"📞 {data['contact']}\n\n"
+            f"📝 {data['description']}\n\n"
+            "Please open /admin → Pending Ads to review."
+        )
+
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=admin_text,
+        )
+
+    except Exception as e:
+        print(
+            "Admin notification error:",
+            e,
+        )
+
+    clear_state(context)
+
+    await update.message.reply_text(
+        "✅ ADVERT SUBMITTED!\n\n"
+        f"🆔 Submission #{listing_id}\n\n"
+        "Your advert has been sent to our admin "
+        "for approval.\n\n"
+        "It will become visible to everyone after approval.",
+        reply_markup=main_menu(),
+    )
+
+
+# =========================================================
 # SAVE EDITED LISTING
 # =========================================================
 
 async def save_edited_listing(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
+    update,
+    context,
     photo,
 ):
     listing_id = context.user_data.get(
@@ -1677,12 +2164,13 @@ async def save_edited_listing(
     )
 
     if not listing_id or not region or not data:
-        clear_admin_state(context)
+        clear_state(context)
 
         await update.message.reply_text(
-            "❌ Something went wrong with the edit.\n\n"
+            "❌ Something went wrong.\n\n"
             "Please start again with /admin."
         )
+
         return
 
     try:
@@ -1698,14 +2186,18 @@ async def save_edited_listing(
         )
 
     except Exception as e:
-        print("Error editing listing:", e)
+        print(
+            "Edit listing error:",
+            e,
+        )
 
         await update.message.reply_text(
-            "❌ Database error while editing the listing."
+            "❌ Database error while editing."
         )
+
         return
 
-    clear_admin_state(context)
+    clear_state(context)
 
     await update.message.reply_text(
         f"✅ Listing #{listing_id} updated successfully!",
@@ -1721,10 +2213,12 @@ class HealthHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.send_response(200)
+
         self.send_header(
             "Content-type",
             "text/plain",
         )
+
         self.end_headers()
 
         self.wfile.write(
@@ -1753,8 +2247,8 @@ def run_health_server():
 # =========================================================
 
 async def error_handler(
-    update: object,
-    context: ContextTypes.DEFAULT_TYPE,
+    update,
+    context,
 ):
     print(
         "Telegram bot error:",
@@ -1772,7 +2266,7 @@ def main():
         "Starting Kenya Jobs & Deals Bot..."
     )
 
-    # Database
+    # Prepare database
     init_database()
 
     # Render health server
@@ -1827,11 +2321,11 @@ def main():
         )
     )
 
-    # ONE text handler only
+    # ONE text handler
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
-            admin_input,
+            text_input,
         )
     )
 
