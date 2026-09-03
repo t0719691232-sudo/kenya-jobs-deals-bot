@@ -928,7 +928,7 @@ def main():
     print(
         "🇰🇪 Kenya Jobs & Deals Bot is running..."
     )
-
+print("STARTING TELEGRAM POLLING...")
     app.run_polling(
         drop_pending_updates=True
     )
