@@ -564,25 +564,65 @@ def format_listing(row):
     )
 
 
+def normalize_phone_for_whatsapp(contact):
+    """Return a WhatsApp-ready international phone number when possible."""
+    if not contact:
+        return None
+
+    # Use the first phone-like number when contact contains extra text.
+    match = re.search(r"(?:\\+?\\d[\\d\\s().-]{7,}\\d)", contact)
+    if not match:
+        return None
+
+    number = re.sub(r"\\D", "", match.group(0))
+
+    # Kenya local mobile format: 07xxxxxxxx / 01xxxxxxxx -> 2547xxxxxxxx / 2541xxxxxxxx.
+    if number.startswith("0") and len(number) == 10:
+        number = "254" + number[1:]
+
+    # Already international Kenya format without '+'.
+    if number.startswith("254") and len(number) == 12:
+        return number
+
+    # If the contact is another international number, keep it if it is plausible.
+    if 10 <= len(number) <= 15:
+        return number
+
+    return None
+
+
 def listing_buttons(row):
     listing_id = row[0]
     category = row[1]
+    contact = row[5]
 
     if category in ["jobs", "gigs"]:
         button_text = "📞 Apply / Contact"
     else:
         button_text = "📞 Contact Seller"
 
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    button_text,
-                    callback_data=f"contact_{listing_id}",
-                )
-            ]
-        ]
-    )
+    buttons = [
+        InlineKeyboardButton(
+            button_text,
+            callback_data=f"contact_{listing_id}",
+        )
+    ]
+
+    whatsapp_number = normalize_phone_for_whatsapp(contact)
+    if whatsapp_number:
+        if category in ["jobs", "gigs"]:
+            whatsapp_text = "💬 Apply on WhatsApp"
+        else:
+            whatsapp_text = "💬 WhatsApp Seller"
+
+        buttons.append(
+            InlineKeyboardButton(
+                whatsapp_text,
+                url=f"https://wa.me/{whatsapp_number}",
+            )
+        )
+
+    return InlineKeyboardMarkup([buttons])
 
 
 async def send_listing(message, row):
@@ -1168,7 +1208,7 @@ async def button_handler(
             f"☎️ Contact:\n"
             f"{contact}\n\n"
             f"🆔 Listing #{listing_id}\n\n"
-            "Please contact the advertiser directly."
+            "You can contact the advertiser directly or use the WhatsApp button on the listing."
         )
 
         return
