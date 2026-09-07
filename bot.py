@@ -22,7 +22,7 @@ from telegram.ext import (
 TOKEN = os.environ["BOT_TOKEN"].strip()
 DATABASE_URL = os.environ["DATABASE_URL"].strip()
 
-ADMIN_ID = 1773092768
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "1773092768"))
 PORT = int(os.environ.get("PORT", 10000))
 
 
@@ -1640,6 +1640,16 @@ async def button_handler(
 
 
 # =========================================================
+# CLEAN FIVE-LINE INPUT
+# =========================================================
+
+def clean_input_line(line):
+    """Remove optional field numbering such as '1.' or '1)'."""
+    import re
+    return re.sub(r"^\\s*[1-5][.)]\\s*", "", line).strip()
+
+
+# =========================================================
 # TEXT INPUT
 # =========================================================
 
@@ -1686,11 +1696,11 @@ async def text_input(
                 return
 
             context.user_data["advertiser_data"] = {
-                "title": lines[0].strip(),
-                "location": lines[1].strip(),
-                "price": lines[2].strip(),
-                "contact": lines[3].strip(),
-                "description": lines[4].strip(),
+                "title": clean_input_line(lines[0]),
+                "location": clean_input_line(lines[1]),
+                "price": clean_input_line(lines[2]),
+                "contact": clean_input_line(lines[3]),
+                "description": clean_input_line(lines[4]),
             }
 
             context.user_data["admin_action"] = "advertiser_photo"
@@ -1782,11 +1792,11 @@ async def text_input(
             return
 
         context.user_data["listing_data"] = {
-            "title": lines[0].strip(),
-            "location": lines[1].strip(),
-            "price": lines[2].strip(),
-            "contact": lines[3].strip(),
-            "description": lines[4].strip(),
+            "title": clean_input_line(lines[0]),
+            "location": clean_input_line(lines[1]),
+            "price": clean_input_line(lines[2]),
+            "contact": clean_input_line(lines[3]),
+            "description": clean_input_line(lines[4]),
         }
 
         context.user_data["admin_action"] = "waiting_photo"
@@ -1872,11 +1882,11 @@ async def text_input(
             return
 
         context.user_data["editing_data"] = {
-            "title": lines[0].strip(),
-            "location": lines[1].strip(),
-            "price": lines[2].strip(),
-            "contact": lines[3].strip(),
-            "description": lines[4].strip(),
+            "title": clean_input_line(lines[0]),
+            "location": clean_input_line(lines[1]),
+            "price": clean_input_line(lines[2]),
+            "contact": clean_input_line(lines[3]),
+            "description": clean_input_line(lines[4]),
         }
 
         context.user_data["admin_action"] = "edit_photo"
