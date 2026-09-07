@@ -255,12 +255,83 @@ def get_listings(category, region=None):
 # =========================================================
 
 def search_listings(search_text):
-    search_pattern = f"%{search_text}%"
+    """
+    Search approved listings using all meaningful words in the query.
+
+    Examples:
+      "accountant Nairobi" -> both words must appear somewhere in the listing.
+      "Toyota Westlands" -> both Toyota and Westlands must appear.
+      Exact phrases and title/location matches are ranked higher.
+    """
+    raw_query = " ".join(search_text.strip().split())
+    if not raw_query:
+        return []
+
+    # Ignore common filler words so searches such as "jobs in Nairobi"
+    # still work naturally.
+    stop_words = {
+        "a", "an", "and", "at", "for", "from", "in", "is",
+        "near", "of", "on", "or", "the", "to", "with",
+    }
+
+    words = [
+        word
+        for word in re.findall(r"[^\s]+", raw_query.lower())
+        if word not in stop_words and len(word) >= 2
+    ]
+
+    # If the query consists only of filler words, use the complete query.
+    if not words:
+        words = [raw_query.lower()]
+
+    # Remove duplicate terms while preserving order.
+    words = list(dict.fromkeys(words))
+
+    searchable = """
+        COALESCE(title, '') || ' ' ||
+        COALESCE(location, '') || ' ' ||
+        COALESCE(description, '') || ' ' ||
+        COALESCE(category, '') || ' ' ||
+        COALESCE(region, '') || ' ' ||
+        COALESCE(price, '')
+    """
+
+    conditions = []
+    params = []
+
+    # Every meaningful search word must match somewhere in the listing.
+    for word in words:
+        conditions.append(f"{searchable} ILIKE %s")
+        params.append(f"%{word}%")
+
+    # Rank exact phrase matches first, then title/location/category matches.
+    score_parts = [
+        "CASE WHEN " + searchable + " ILIKE %s THEN 100 ELSE 0 END"
+    ]
+    score_params = [f"%{raw_query.lower()}%"]
+
+    for word in words:
+        score_parts.append(
+            "CASE WHEN COALESCE(title, '') ILIKE %s THEN 20 ELSE 0 END"
+        )
+        score_params.append(f"%{word}%")
+
+        score_parts.append(
+            "CASE WHEN COALESCE(location, '') ILIKE %s THEN 15 ELSE 0 END"
+        )
+        score_params.append(f"%{word}%")
+
+        score_parts.append(
+            "CASE WHEN COALESCE(category, '') ILIKE %s THEN 10 ELSE 0 END"
+        )
+        score_params.append(f"%{word}%")
+
+    score_sql = " + ".join(score_parts)
 
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT
                     id,
                     category,
@@ -276,22 +347,12 @@ def search_listings(search_text):
                 FROM listings
                 WHERE status = 'approved'
                 AND (
-                    title ILIKE %s
-                    OR location ILIKE %s
-                    OR description ILIKE %s
-                    OR category ILIKE %s
-                    OR region ILIKE %s
+                    {' AND '.join(conditions)}
                 )
-                ORDER BY id DESC
+                ORDER BY ({score_sql}) DESC, id DESC
                 LIMIT 30
                 """,
-                (
-                    search_pattern,
-                    search_pattern,
-                    search_pattern,
-                    search_pattern,
-                    search_pattern,
-                ),
+                params + score_params,
             )
 
             return cur.fetchall()
