@@ -1147,6 +1147,66 @@ def region_menu(category):
 # ADMIN MENU
 # =========================================================
 
+
+def get_admin_dashboard():
+    """Return key business metrics for the admin dashboard."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_listings,
+                    COUNT(*) FILTER (WHERE status = 'approved') AS approved_listings,
+                    COUNT(*) FILTER (WHERE status = 'pending') AS pending_listings,
+                    COUNT(*) FILTER (
+                        WHERE featured = TRUE
+                          AND (featured_until IS NULL OR featured_until > CURRENT_TIMESTAMP)
+                    ) AS active_featured
+                FROM listings
+                """
+            )
+            listing_stats = cur.fetchone()
+
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE status = 'pending') AS pending_premium,
+                    COUNT(*) FILTER (WHERE status = 'approved') AS approved_premium,
+                    COALESCE(SUM(price) FILTER (WHERE status = 'approved'), 0) AS premium_revenue
+                FROM premium_requests
+                """
+            )
+            premium_stats = cur.fetchone()
+
+            # The bot does not maintain a separate users table.
+            # Count unique Telegram IDs recorded in listings, premium requests,
+            # and favourites as "recorded users".
+            cur.execute(
+                """
+                SELECT COUNT(DISTINCT user_id)
+                FROM (
+                    SELECT user_id FROM listings WHERE user_id IS NOT NULL
+                    UNION
+                    SELECT user_id FROM premium_requests
+                    UNION
+                    SELECT user_id FROM favorites
+                ) AS recorded_users
+                """
+            )
+            recorded_users = cur.fetchone()[0]
+
+    return {
+        "total_listings": listing_stats[0] or 0,
+        "approved_listings": listing_stats[1] or 0,
+        "pending_listings": listing_stats[2] or 0,
+        "active_featured": listing_stats[3] or 0,
+        "pending_premium": premium_stats[0] or 0,
+        "approved_premium": premium_stats[1] or 0,
+        "premium_revenue": premium_stats[2] or 0,
+        "recorded_users": recorded_users or 0,
+    }
+
+
 def admin_menu():
     keyboard = [
         [
@@ -1163,9 +1223,13 @@ def admin_menu():
         ],
         [
             InlineKeyboardButton(
+                "📊 Dashboard",
+                callback_data="admin_dashboard",
+            ),
+            InlineKeyboardButton(
                 "💎 Premium Requests",
                 callback_data="premium_requests",
-            )
+            ),
         ],
         [
             InlineKeyboardButton(
@@ -1941,6 +2005,35 @@ async def button_handler(
     # -----------------------------------------------------
     # PREMIUM REQUESTS
     # -----------------------------------------------------
+
+    if data == "admin_menu":
+        await query.edit_message_text(
+            "🔐 ADMIN PANEL",
+            reply_markup=admin_menu(),
+        )
+        return
+
+    if data == "admin_dashboard":
+        stats = get_admin_dashboard()
+
+        await query.edit_message_text(
+            "📊 ADMIN DASHBOARD\n\n"
+            f"👥 Recorded Users: {stats['recorded_users']}\n"
+            f"📋 Total Listings: {stats['total_listings']}\n"
+            f"✅ Approved Listings: {stats['approved_listings']}\n"
+            f"⏳ Pending Ads: {stats['pending_listings']}\n"
+            f"⭐ Active Featured: {stats['active_featured']}\n\n"
+            f"💎 Pending Premium: {stats['pending_premium']}\n"
+            f"🏆 Approved Premium: {stats['approved_premium']}\n"
+            f"💰 Premium Revenue: KSh {stats['premium_revenue']:,}\n\n"
+            "ℹ️ Revenue counts approved Premium requests only.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Refresh", callback_data="admin_dashboard")],
+                [InlineKeyboardButton("💎 Premium Requests", callback_data="premium_requests")],
+                [InlineKeyboardButton("🔐 Admin Panel", callback_data="admin_menu")],
+            ]),
+        )
+        return
 
     if data == "premium_requests":
         requests = get_pending_premium_requests()
