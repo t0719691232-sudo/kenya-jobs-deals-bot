@@ -3802,11 +3802,6 @@ def main():
     # Prepare database
     init_database()
 
-    # Automatic maintenance: expire old Featured promotions.
-    asyncio.get_event_loop().create_task(
-        automatic_maintenance()
-    )
-
     # Render health server
     health_thread = threading.Thread(
         target=run_health_server,
@@ -3821,6 +3816,13 @@ def main():
         bot_info = await application.bot.get_me()
         BOT_USERNAME = bot_info.username or ""
         print(f"Bot username: @{BOT_USERNAME}")
+
+        # Start automatic Featured expiry maintenance on the bot's active event loop.
+        application.create_task(
+            automatic_maintenance(),
+            name="automatic-maintenance",
+        )
+        print("Automatic maintenance started.")
 
     app = (
         ApplicationBuilder()
