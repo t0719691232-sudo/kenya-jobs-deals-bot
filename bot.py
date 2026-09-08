@@ -1,6 +1,7 @@
 import re
 from urllib.parse import quote
 import os
+from datetime import datetime, timedelta
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -27,6 +28,7 @@ DATABASE_URL = os.environ["DATABASE_URL"].strip()
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "1773092768"))
 PORT = int(os.environ.get("PORT", 10000))
 BOT_USERNAME = ""
+PREMIUM_CONTACT = os.environ.get("PREMIUM_CONTACT", "Contact admin for payment details")
 
 
 # =========================================================
@@ -110,6 +112,36 @@ def init_database():
                     listing_id INTEGER NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (user_id, listing_id)
+                )
+                """
+            )
+
+            # Featured / premium listing fields.
+            cur.execute(
+                """
+                ALTER TABLE listings
+                ADD COLUMN IF NOT EXISTS featured BOOLEAN DEFAULT FALSE
+                """
+            )
+
+            cur.execute(
+                """
+                ALTER TABLE listings
+                ADD COLUMN IF NOT EXISTS featured_until TIMESTAMP
+                """
+            )
+
+            # Manual premium requests. Admin approves after confirming payment.
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS premium_requests (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    listing_id INTEGER NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+                    duration_days INTEGER NOT NULL,
+                    price INTEGER NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
@@ -248,7 +280,9 @@ def get_favorite_listings(user_id):
                     l.region,
                     l.photo,
                     l.status,
-                    l.user_id
+                    l.user_id,
+                    l.featured,
+                    l.featured_until
                 FROM listings l
                 INNER JOIN favorites f
                     ON f.listing_id = l.id
@@ -282,7 +316,9 @@ def get_listing(listing_id):
                     region,
                     photo,
                     status,
-                    user_id
+                    user_id,
+                    featured,
+                    featured_until
                 FROM listings
                 WHERE id = %s
                 """,
@@ -319,7 +355,7 @@ def get_listings(category, region=None):
                     WHERE category = %s
                     AND region = %s
                     AND status = 'approved'
-                    ORDER BY id DESC
+                    ORDER BY (featured = TRUE AND (featured_until IS NULL OR featured_until > CURRENT_TIMESTAMP)) DESC, id DESC
                     """,
                     (category, region),
                 )
@@ -342,7 +378,7 @@ def get_listings(category, region=None):
                     FROM listings
                     WHERE category = %s
                     AND status = 'approved'
-                    ORDER BY id DESC
+                    ORDER BY (featured = TRUE AND (featured_until IS NULL OR featured_until > CURRENT_TIMESTAMP)) DESC, id DESC
                     """,
                     (category,),
                 )
@@ -443,13 +479,15 @@ def search_listings(search_text):
                     region,
                     photo,
                     status,
-                    user_id
+                    user_id,
+                    featured,
+                    featured_until
                 FROM listings
                 WHERE status = 'approved'
                 AND (
                     {' AND '.join(conditions)}
                 )
-                ORDER BY ({score_sql}) DESC, id DESC
+                ORDER BY (featured = TRUE AND (featured_until IS NULL OR featured_until > CURRENT_TIMESTAMP)) DESC, ({score_sql}) DESC, id DESC
                 LIMIT 30
                 """,
                 params + score_params,
@@ -478,7 +516,9 @@ def get_pending_listings():
                     region,
                     photo,
                     status,
-                    user_id
+                    user_id,
+                    featured,
+                    featured_until
                 FROM listings
                 WHERE status = 'pending'
                 ORDER BY id ASC
@@ -641,6 +681,169 @@ def category_name(category):
 
 
 # =========================================================
+# PREMIUM / FEATURED LISTINGS
+# =========================================================
+
+PREMIUM_PRICES = {
+    7: 200,
+    14: 350,
+    30: 600,
+}
+
+
+def is_featured_active(row):
+    """Return True when a listing is currently featured."""
+    if len(row) <= 11 or not row[11]:
+        return False
+    featured_until = row[12] if len(row) > 12 else None
+    return featured_until is None or featured_until > datetime.now()
+
+
+def get_user_listings(user_id):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    category,
+                    title,
+                    location,
+                    price,
+                    contact,
+                    description,
+                    region,
+                    photo,
+                    status,
+                    user_id,
+                    featured,
+                    featured_until
+                FROM listings
+                WHERE user_id = %s
+                  AND status = 'approved'
+                ORDER BY id DESC
+                LIMIT 30
+                """,
+                (user_id,),
+            )
+            return cur.fetchall()
+
+
+def create_premium_request(user_id, listing_id, duration_days):
+    price = PREMIUM_PRICES[duration_days]
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO premium_requests
+                    (user_id, listing_id, duration_days, price, status)
+                VALUES (%s, %s, %s, %s, 'pending')
+                RETURNING id
+                """,
+                (user_id, listing_id, duration_days, price),
+            )
+            request_id = cur.fetchone()[0]
+        conn.commit()
+    return request_id
+
+
+def get_pending_premium_requests():
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    pr.id,
+                    pr.user_id,
+                    pr.listing_id,
+                    pr.duration_days,
+                    pr.price,
+                    pr.status,
+                    pr.created_at,
+                    l.title,
+                    l.category
+                FROM premium_requests pr
+                INNER JOIN listings l ON l.id = pr.listing_id
+                WHERE pr.status = 'pending'
+                ORDER BY pr.id ASC
+                """
+            )
+            return cur.fetchall()
+
+
+def approve_premium_request(request_id):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id, listing_id, duration_days
+                FROM premium_requests
+                WHERE id = %s AND status = 'pending'
+                """,
+                (request_id,),
+            )
+            request = cur.fetchone()
+            if not request:
+                return None
+
+            user_id, listing_id, duration_days = request
+            cur.execute(
+                """
+                SELECT featured_until
+                FROM listings
+                WHERE id = %s AND status = 'approved'
+                """,
+                (listing_id,),
+            )
+            listing_row = cur.fetchone()
+            if not listing_row:
+                return None
+
+            current_until = listing_row[0]
+            now = datetime.now()
+            base = current_until if current_until and current_until > now else now
+            new_until = base + timedelta(days=duration_days)
+
+            cur.execute(
+                """
+                UPDATE listings
+                SET featured = TRUE, featured_until = %s
+                WHERE id = %s AND status = 'approved'
+                """,
+                (new_until, listing_id),
+            )
+            cur.execute(
+                """
+                UPDATE premium_requests
+                SET status = 'approved'
+                WHERE id = %s
+                """,
+                (request_id,),
+            )
+
+        conn.commit()
+
+    return user_id, listing_id, new_until
+
+
+def reject_premium_request(request_id):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE premium_requests
+                SET status = 'rejected'
+                WHERE id = %s AND status = 'pending'
+                RETURNING user_id, listing_id
+                """,
+                (request_id,),
+            )
+            row = cur.fetchone()
+        conn.commit()
+    return row
+
+
+# =========================================================
 # LISTING DISPLAY
 # =========================================================
 
@@ -653,8 +856,11 @@ def format_listing(row):
     description = row[6]
     region = row[7] or "Other"
 
+    featured_label = "⭐ FEATURED\n\n" if is_featured_active(row) else ""
+
     return (
         f"🆔 Listing #{listing_id}\n\n"
+        f"{featured_label}"
         f"📌 {title}\n\n"
         f"🗂 Category: {category_name(category)}\n"
         f"🗺 Region: {region}\n"
@@ -945,6 +1151,12 @@ def admin_menu():
             InlineKeyboardButton(
                 "📥 Pending Ads",
                 callback_data="pending_ads",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "💎 Premium Requests",
+                callback_data="premium_requests",
             )
         ],
         [
@@ -1591,22 +1803,121 @@ async def button_handler(
     # -----------------------------------------------------
 
     if data == "premium":
+        listings = get_user_listings(user_id)
+
+        if not listings:
+            await query.edit_message_text(
+                "⭐ PREMIUM / FEATURED\n\n"
+                "You do not have any approved adverts to feature yet.\n\n"
+                "First submit an advert through 📢 Advertise With Us.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")]]
+                ),
+            )
+            return
+
+        buttons = []
+        for listing in listings:
+            status_text = "⭐ Featured" if is_featured_active(listing) else "📌 Feature"
+            buttons.append([
+                InlineKeyboardButton(
+                    f"{status_text}: #{listing[0]} {listing[2][:28]}",
+                    callback_data=f"premium_listing_{listing[0]}",
+                )
+            ])
+
+        buttons.append([InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")])
+
         await query.edit_message_text(
-            "⭐ PREMIUM\n\n"
-            "Premium features are coming soon.\n\n"
-            "Premium listings will receive more visibility.",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "🏠 Main Menu",
-                            callback_data="main_menu",
-                        )
-                    ]
-                ]
-            ),
+            "⭐ PREMIUM / FEATURED\n\n"
+            "Choose one of your approved adverts to promote.\n\n"
+            "Featured adverts appear first in listings and show a ⭐ FEATURED label.\n\n"
+            "Pricing:\n"
+            "📌 7 days — KSh 200\n"
+            "📌 14 days — KSh 350\n"
+            "📌 30 days — KSh 600\n\n"
+            "Payment is confirmed manually by admin.",
+            reply_markup=InlineKeyboardMarkup(buttons),
         )
         return
+
+    if data.startswith("premium_listing_"):
+        try:
+            listing_id = int(data.replace("premium_listing_", "", 1))
+        except ValueError:
+            await query.message.reply_text("❌ Invalid listing.")
+            return
+
+        listing = get_listing(listing_id)
+        if not listing or listing[9] != "approved" or listing[10] != user_id:
+            await query.message.reply_text("❌ This listing is not available for your account.")
+            return
+
+        await query.edit_message_text(
+            "⭐ FEATURE THIS LISTING\n\n"
+            f"🆔 Listing #{listing_id}\n"
+            f"📌 {listing[2]}\n\n"
+            "Choose a promotion period:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📌 7 days — KSh 200", callback_data=f"premium_duration_{listing_id}_7")],
+                [InlineKeyboardButton("📌 14 days — KSh 350", callback_data=f"premium_duration_{listing_id}_14")],
+                [InlineKeyboardButton("📌 30 days — KSh 600", callback_data=f"premium_duration_{listing_id}_30")],
+                [InlineKeyboardButton("⬅️ Back", callback_data="premium")],
+            ]),
+        )
+        return
+
+    if data.startswith("premium_duration_"):
+        parts = data.split("_")
+        try:
+            listing_id = int(parts[2])
+            duration_days = int(parts[3])
+        except (ValueError, IndexError):
+            await query.message.reply_text("❌ Invalid premium option.")
+            return
+
+        if duration_days not in PREMIUM_PRICES:
+            await query.message.reply_text("❌ Invalid premium period.")
+            return
+
+        listing = get_listing(listing_id)
+        if not listing or listing[9] != "approved" or listing[10] != user_id:
+            await query.message.reply_text("❌ This listing is not available for your account.")
+            return
+
+        price = PREMIUM_PRICES[duration_days]
+        request_id = create_premium_request(user_id, listing_id, duration_days)
+
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=(
+                    "💎 PREMIUM REQUEST\n\n"
+                    f"Request #{request_id}\n"
+                    f"🆔 Listing #{listing_id}\n"
+                    f"📌 {listing[2]}\n"
+                    f"👤 User ID: {user_id}\n"
+                    f"📌 Duration: {duration_days} days\n"
+                    f"💰 Price: KSh {price}\n\n"
+                    "Confirm payment, then approve from /admin → Premium Requests."
+                ),
+            )
+        except Exception as e:
+            print("Premium admin notification error:", e)
+
+        await query.edit_message_text(
+            "💎 PREMIUM REQUEST SENT\n\n"
+            f"📌 Listing: {listing[2]}\n"
+            f"⭐ Duration: {duration_days} days\n"
+            f"💰 Amount: KSh {price}\n\n"
+            f"Payment: {PREMIUM_CONTACT}\n\n"
+            "After payment, admin will confirm and activate your Featured listing.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")]
+            ]),
+        )
+        return
+
 
     # =====================================================
     # ADMIN ONLY
@@ -1630,6 +1941,113 @@ async def button_handler(
             "🔐 ADMIN PANEL",
             reply_markup=admin_menu(),
         )
+        return
+
+    # -----------------------------------------------------
+    # PREMIUM REQUESTS
+    # -----------------------------------------------------
+
+    if data == "premium_requests":
+        requests = get_pending_premium_requests()
+
+        if not requests:
+            await query.edit_message_text(
+                "💎 PREMIUM REQUESTS\n\n"
+                "There are no premium requests waiting for approval.",
+                reply_markup=admin_menu(),
+            )
+            return
+
+        await query.edit_message_text(
+            f"💎 PREMIUM REQUESTS\n\n"
+            f"{len(requests)} request(s) waiting for payment confirmation."
+        )
+
+        for req in requests:
+            request_id, requester_id, listing_id, duration_days, price, status, created_at, title, category = req
+            buttons = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Approve", callback_data=f"premium_approve_{request_id}"),
+                    InlineKeyboardButton("❌ Reject", callback_data=f"premium_reject_{request_id}"),
+                ]
+            ])
+            await query.message.reply_text(
+                "💎 PREMIUM REQUEST\n\n"
+                f"Request #{request_id}\n"
+                f"🆔 Listing #{listing_id}\n"
+                f"📌 {title}\n"
+                f"🗂 {category_name(category)}\n"
+                f"👤 User ID: {requester_id}\n"
+                f"📌 Duration: {duration_days} days\n"
+                f"💰 Price: KSh {price}\n"
+                f"🕐 Requested: {created_at}\n\n"
+                "Confirm payment before approving.",
+                reply_markup=buttons,
+            )
+
+        await query.message.reply_text("🔐 Admin Panel", reply_markup=admin_menu())
+        return
+
+    if data.startswith("premium_approve_"):
+        try:
+            request_id = int(data.replace("premium_approve_", "", 1))
+        except ValueError:
+            await query.message.reply_text("❌ Invalid request ID.")
+            return
+
+        result = approve_premium_request(request_id)
+        if not result:
+            await query.message.reply_text("❌ Request not found, already processed, or listing unavailable.")
+            return
+
+        requester_id, listing_id, featured_until = result
+        await query.edit_message_text(
+            f"✅ Premium request #{request_id} approved.\n\n"
+            f"🆔 Listing #{listing_id}\n"
+            f"⭐ Featured until: {featured_until}"
+        )
+
+        try:
+            await context.bot.send_message(
+                chat_id=requester_id,
+                text=(
+                    "🎉 PREMIUM ACTIVATED!\n\n"
+                    f"Your listing #{listing_id} is now ⭐ FEATURED.\n"
+                    f"It will remain featured until {featured_until}."
+                ),
+            )
+        except Exception as e:
+            print("Premium approval notification error:", e)
+        return
+
+    if data.startswith("premium_reject_"):
+        try:
+            request_id = int(data.replace("premium_reject_", "", 1))
+        except ValueError:
+            await query.message.reply_text("❌ Invalid request ID.")
+            return
+
+        result = reject_premium_request(request_id)
+        if not result:
+            await query.message.reply_text("❌ Request not found or already processed.")
+            return
+
+        requester_id, listing_id = result
+        await query.edit_message_text(
+            f"❌ Premium request #{request_id} rejected.\n\n"
+            f"🆔 Listing #{listing_id}"
+        )
+
+        try:
+            await context.bot.send_message(
+                chat_id=requester_id,
+                text=(
+                    "❌ PREMIUM REQUEST NOT APPROVED\n\n"
+                    f"Your Featured request for listing #{listing_id} was not approved."
+                ),
+            )
+        except Exception as e:
+            print("Premium rejection notification error:", e)
         return
 
     # -----------------------------------------------------
