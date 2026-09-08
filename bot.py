@@ -621,6 +621,7 @@ def clear_state(context):
         "advertiser_category",
         "advertiser_region",
         "advertiser_data",
+        "advertiser_photo",
     ]
 
     for key in keys:
@@ -1475,6 +1476,30 @@ async def button_handler(
         return
 
     # -----------------------------------------------------
+    # ADVERTISER PREVIEW CONFIRM / CANCEL
+    # -----------------------------------------------------
+
+    if data == "advertiser_cancel":
+        clear_state(context)
+        await query.edit_message_text(
+            "❌ Advert cancelled.\n\n"
+            "No listing was submitted.",
+            reply_markup=main_menu(),
+        )
+        return
+
+    if data == "advertiser_confirm":
+        if not context.user_data.get("advertising"):
+            await query.message.reply_text("❌ This advert session has expired. Please start again.")
+            return
+
+        photo = context.user_data.get("advertiser_photo")
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text("⏳ Submitting your advert...")
+        await save_advertiser_submission(query.message, context, photo)
+        return
+
+    # -----------------------------------------------------
     # MY FAVOURITES
     # -----------------------------------------------------
 
@@ -2028,11 +2053,7 @@ async def text_input(
 
         if context.user_data.get("admin_action") == "advertiser_photo":
             if text.lower() == "skip":
-                await save_advertiser_submission(
-                    update,
-                    context,
-                    None,
-                )
+                await show_advertiser_preview(update, context, None)
             else:
                 await update.message.reply_text(
                     "📸 Please send a photo or type skip."
@@ -2377,15 +2398,13 @@ async def photo_input(
     # ADVERTISER PHOTO
     # -----------------------------------------------------
 
-    if context.user_data.get(
-        "advertising"
-    ):
-        await save_advertiser_submission(
-            update,
-            context,
-            photo_file_id,
-        )
-
+    if context.user_data.get("advertising"):
+        if context.user_data.get("admin_action") == "advertiser_photo":
+            await show_advertiser_preview(update, context, photo_file_id)
+        else:
+            await update.message.reply_text(
+                "❌ Please use the buttons on the preview to submit or cancel."
+            )
         return
 
     # -----------------------------------------------------
@@ -2483,6 +2502,56 @@ async def save_admin_listing(
         f"📸 Photo: {'Yes' if photo else 'No'}",
         reply_markup=admin_menu(),
     )
+
+
+# =========================================================
+# ADVERTISER PREVIEW
+# =========================================================
+
+async def show_advertiser_preview(update, context, photo=None):
+    data = context.user_data.get("advertiser_data")
+    category = context.user_data.get("advertiser_category")
+    region = context.user_data.get("advertiser_region")
+
+    if not data or not category or not region:
+        clear_state(context)
+        await update.message.reply_text("❌ Something went wrong. Please start again.")
+        return
+
+    preview = (
+        "👀 ADVERT PREVIEW\n\n"
+        f"🗂 Category: {category_name(category)}\n"
+        f"🗺 Region: {region}\n"
+        f"📌 {data['title']}\n"
+        f"📍 {data['location']}\n"
+        f"💰 {data['price']}\n"
+        f"☎️ {data['contact']}\n\n"
+        f"📝 {data['description']}\n\n"
+        "Please check everything carefully.\n"
+        "Your advert will be sent to admin for approval."
+    )
+
+    markup = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Submit Advert", callback_data="advertiser_confirm"),
+            InlineKeyboardButton("❌ Cancel", callback_data="advertiser_cancel"),
+        ]
+    ])
+
+    context.user_data["advertiser_photo"] = photo
+    context.user_data["admin_action"] = "advertiser_confirm"
+
+    if photo:
+        await update.message.reply_photo(
+            photo=photo,
+            caption=preview,
+            reply_markup=markup,
+        )
+    else:
+        await update.message.reply_text(
+            preview + "\n\n📸 Photo: None",
+            reply_markup=markup,
+        )
 
 
 # =========================================================
