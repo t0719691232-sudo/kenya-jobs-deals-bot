@@ -1496,7 +1496,7 @@ async def button_handler(
         photo = context.user_data.get("advertiser_photo")
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text("⏳ Submitting your advert...")
-        await save_advertiser_submission(query.message, context, photo)
+        await save_advertiser_submission(query, context, photo)
         return
 
     # -----------------------------------------------------
@@ -2559,7 +2559,7 @@ async def show_advertiser_preview(update, context, photo=None):
 # =========================================================
 
 async def save_advertiser_submission(
-    update,
+    query,
     context,
     photo,
 ):
@@ -2578,7 +2578,7 @@ async def save_advertiser_submission(
     if not category or not region or not data:
         clear_state(context)
 
-        await update.message.reply_text(
+        await query.message.reply_text(
             "❌ Something went wrong.\n\n"
             "Please start again."
         )
@@ -2596,7 +2596,7 @@ async def save_advertiser_submission(
             description=data["description"],
             photo=photo,
             status="pending",
-            user_id=update.effective_user.id,
+            user_id=query.from_user.id,
         )
 
     except Exception as e:
@@ -2605,7 +2605,7 @@ async def save_advertiser_submission(
             e,
         )
 
-        await update.message.reply_text(
+        await query.message.reply_text(
             "❌ There was a database error.\n\n"
             "Please try again later."
         )
@@ -2641,7 +2641,7 @@ async def save_advertiser_submission(
 
     clear_state(context)
 
-    await update.message.reply_text(
+    await query.message.reply_text(
         "✅ ADVERT SUBMITTED!\n\n"
         f"🆔 Submission #{listing_id}\n\n"
         "Your advert has been sent to our admin "
