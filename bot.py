@@ -26,6 +26,7 @@ DATABASE_URL = os.environ["DATABASE_URL"].strip()
 
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "1773092768"))
 PORT = int(os.environ.get("PORT", 10000))
+BOT_USERNAME = ""
 
 
 # =========================================================
@@ -730,6 +731,8 @@ def listing_buttons(row, user_id=None):
         )
     )
 
+    deep_link = f"https://t.me/{BOT_USERNAME}?start=listing_{listing_id}" if BOT_USERNAME else ""
+
     share_text = (
         f"🇰🇪 Kenya Jobs & Deals\n\n"
         f"📌 {title}\n"
@@ -741,7 +744,11 @@ def listing_buttons(row, user_id=None):
     buttons.append(
         InlineKeyboardButton(
             "📤 Share Listing",
-            url=f"https://t.me/share/url?text={quote(share_text)}",
+            url=(
+                f"https://t.me/share/url?url={quote(deep_link, safe="")}&text={quote(share_text)}"
+                if deep_link
+                else f"https://t.me/share/url?text={quote(share_text)}"
+            ),
         )
     )
 
@@ -1090,6 +1097,35 @@ def admin_region_menu(prefix):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clear_state(context)
+
+    # Support shared listing deep links such as /start listing_123.
+    if context.args:
+        payload = context.args[0]
+        if payload.startswith("listing_"):
+            try:
+                listing_id = int(payload.replace("listing_", "", 1))
+            except ValueError:
+                listing_id = None
+
+            if listing_id is not None:
+                listing = get_listing(listing_id)
+                if listing and listing[9] == "approved":
+                    await update.message.reply_text(
+                        "📌 SHARED LISTING\n\n"
+                        "Here is the listing that was shared with you:"
+                    )
+                    await send_listing(
+                        update.message,
+                        listing,
+                        update.effective_user.id,
+                    )
+                    return
+
+                await update.message.reply_text(
+                    "❌ Sorry, this listing is no longer available.",
+                    reply_markup=main_menu(),
+                )
+                return
 
     await update.message.reply_text(
         "🇰🇪 Welcome to Kenya Jobs & Deals Bot!\n\n"
@@ -2682,9 +2718,16 @@ def main():
     health_thread.start()
 
     # Telegram application
+    async def post_init(application):
+        global BOT_USERNAME
+        bot_info = await application.bot.get_me()
+        BOT_USERNAME = bot_info.username or ""
+        print(f"Bot username: @{BOT_USERNAME}")
+
     app = (
         ApplicationBuilder()
         .token(TOKEN)
+        .post_init(post_init)
         .build()
     )
 
