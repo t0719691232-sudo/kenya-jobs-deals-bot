@@ -1,4 +1,5 @@
 import re
+from urllib.parse import quote
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -101,6 +102,17 @@ def init_database():
                 """
             )
 
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS favorites (
+                    user_id BIGINT NOT NULL,
+                    listing_id INTEGER NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, listing_id)
+                )
+                """
+            )
+
         conn.commit()
 
     print("Database ready.")
@@ -161,6 +173,92 @@ def add_listing(
         conn.commit()
 
     return listing_id
+
+
+
+# =========================================================
+# FAVOURITES
+# =========================================================
+
+def is_favorite(user_id, listing_id):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1
+                FROM favorites
+                WHERE user_id = %s AND listing_id = %s
+                """,
+                (user_id, listing_id),
+            )
+            return cur.fetchone() is not None
+
+
+def toggle_favorite(user_id, listing_id):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1
+                FROM favorites
+                WHERE user_id = %s AND listing_id = %s
+                """,
+                (user_id, listing_id),
+            )
+
+            if cur.fetchone():
+                cur.execute(
+                    """
+                    DELETE FROM favorites
+                    WHERE user_id = %s AND listing_id = %s
+                    """,
+                    (user_id, listing_id),
+                )
+                saved = False
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO favorites (user_id, listing_id)
+                    VALUES (%s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (user_id, listing_id),
+                )
+                saved = True
+
+        conn.commit()
+
+    return saved
+
+
+def get_favorite_listings(user_id):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    l.id,
+                    l.category,
+                    l.title,
+                    l.location,
+                    l.price,
+                    l.contact,
+                    l.description,
+                    l.region,
+                    l.photo,
+                    l.status,
+                    l.user_id
+                FROM listings l
+                INNER JOIN favorites f
+                    ON f.listing_id = l.id
+                WHERE f.user_id = %s
+                  AND l.status = 'approved'
+                ORDER BY f.created_at DESC
+                LIMIT 30
+                """,
+                (user_id,),
+            )
+            return cur.fetchall()
 
 
 # =========================================================
@@ -591,30 +689,29 @@ def normalize_phone_for_whatsapp(contact):
     return None
 
 
-def listing_buttons(row):
+def listing_buttons(row, user_id=None):
     listing_id = row[0]
     category = row[1]
     contact = row[5]
+    title = row[2]
+    location = row[3]
 
     if category in ["jobs", "gigs"]:
-        button_text = "📞 Apply / Contact"
+        contact_text = "📞 Apply / Contact"
+        whatsapp_text = "💬 Apply on WhatsApp"
     else:
-        button_text = "📞 Contact Seller"
+        contact_text = "📞 Contact Seller"
+        whatsapp_text = "💬 WhatsApp Seller"
 
     buttons = [
         InlineKeyboardButton(
-            button_text,
+            contact_text,
             callback_data=f"contact_{listing_id}",
         )
     ]
 
     whatsapp_number = normalize_phone_for_whatsapp(contact)
     if whatsapp_number:
-        if category in ["jobs", "gigs"]:
-            whatsapp_text = "💬 Apply on WhatsApp"
-        else:
-            whatsapp_text = "💬 WhatsApp Seller"
-
         buttons.append(
             InlineKeyboardButton(
                 whatsapp_text,
@@ -622,13 +719,44 @@ def listing_buttons(row):
             )
         )
 
-    return InlineKeyboardMarkup([buttons])
+    saved = False
+    if user_id is not None:
+        saved = is_favorite(user_id, listing_id)
+
+    buttons.append(
+        InlineKeyboardButton(
+            "❤️ Saved" if saved else "🤍 Save",
+            callback_data=f"favorite_{listing_id}",
+        )
+    )
+
+    share_text = (
+        f"🇰🇪 Kenya Jobs & Deals\n\n"
+        f"📌 {title}\n"
+        f"📍 {location}\n"
+        f"💰 {row[4]}\n\n"
+        f"🆔 Listing #{listing_id}"
+    )
+
+    buttons.append(
+        InlineKeyboardButton(
+            "📤 Share Listing",
+            url=f"https://t.me/share/url?text={quote(share_text)}",
+        )
+    )
+
+    return InlineKeyboardMarkup(
+        [
+            buttons[:2],
+            buttons[2:],
+        ] if len(buttons) >= 3 else [buttons]
+    )
 
 
-async def send_listing(message, row):
+async def send_listing(message, row, user_id=None):
     text = format_listing(row)
     photo = row[8]
-    buttons = listing_buttons(row)
+    buttons = listing_buttons(row, user_id)
 
     if photo:
         try:
@@ -699,6 +827,12 @@ def main_menu():
             InlineKeyboardButton(
                 "📱 Electronics",
                 callback_data="category_electronics",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "❤️ My Favourites",
+                callback_data="favorites",
             )
         ],
         [
@@ -1273,6 +1407,7 @@ async def button_handler(
             await send_listing(
                 query.message,
                 listing,
+                user_id,
             )
 
         await query.message.reply_text(
@@ -1300,6 +1435,93 @@ async def button_handler(
                 ]
             ),
         )
+
+        return
+
+    # -----------------------------------------------------
+    # MY FAVOURITES
+    # -----------------------------------------------------
+
+    if data == "favorites":
+        clear_state(context)
+
+        listings = get_favorite_listings(user_id)
+
+        if not listings:
+            await query.edit_message_text(
+                "❤️ MY FAVOURITES\n\n"
+                "You have not saved any listings yet.\n\n"
+                "Tap 🤍 Save on a listing to keep it here.",
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "🔎 Search Listings",
+                                callback_data="search",
+                            )
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                "🏠 Main Menu",
+                                callback_data="main_menu",
+                            )
+                        ],
+                    ]
+                ),
+            )
+            return
+
+        await query.edit_message_text(
+            f"❤️ MY FAVOURITES\n\n"
+            f"You have {len(listings)} saved listing(s)."
+        )
+
+        for listing in listings:
+            await send_listing(
+                query.message,
+                listing,
+                user_id,
+            )
+
+        return
+
+    # -----------------------------------------------------
+    # SAVE / UNSAVE LISTING
+    # -----------------------------------------------------
+
+    if data.startswith("favorite_"):
+        try:
+            listing_id = int(data.replace("favorite_", "", 1))
+        except ValueError:
+            await query.message.reply_text("❌ Invalid listing.")
+            return
+
+        listing = get_listing(listing_id)
+
+        if not listing or listing[9] != "approved":
+            await query.message.reply_text(
+                "❌ This listing is no longer available."
+            )
+            return
+
+        saved = toggle_favorite(user_id, listing_id)
+
+        try:
+            await query.edit_message_reply_markup(
+                reply_markup=listing_buttons(listing, user_id)
+            )
+        except Exception as e:
+            print("Favourite button update error:", e)
+
+        if saved:
+            await query.message.reply_text(
+                f"❤️ Saved: {listing[2]}\n\n"
+                "You can find it under ❤️ My Favourites."
+            )
+        else:
+            await query.message.reply_text(
+                f"💔 Removed from favourites: {listing[2]}"
+            )
 
         return
 
@@ -1628,6 +1850,7 @@ async def button_handler(
             await send_listing(
                 query.message,
                 listing,
+                user_id,
             )
 
         await query.message.reply_text(
@@ -1856,6 +2079,7 @@ async def text_input(
             await send_listing(
                 update.message,
                 listing,
+                update.effective_user.id,
             )
 
         await update.message.reply_text(
