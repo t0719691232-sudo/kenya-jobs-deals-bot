@@ -160,6 +160,21 @@ def init_database():
                 )
                 """
             )
+            cur.execute(
+                "ALTER TABLE analytics_events ADD COLUMN IF NOT EXISTS search_query TEXT"
+            )
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bot_users (
+                    user_id BIGINT PRIMARY KEY,
+                    username TEXT,
+                    first_name TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
 
         conn.commit()
 
@@ -1210,17 +1225,43 @@ def region_menu(category):
 # =========================================================
 
 
-def track_analytics_event(event_type, user_id=None, listing_id=None):
+def register_user(user):
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO bot_users (user_id, username, first_name)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (user_id)
+                    DO UPDATE SET
+                        username = EXCLUDED.username,
+                        first_name = EXCLUDED.first_name,
+                        last_seen = CURRENT_TIMESTAMP
+                    """,
+                    (user.id, user.username, user.first_name),
+                )
+            conn.commit()
+    except Exception as e:
+        print("User registration tracking error:", e)
+
+
+def track_analytics_event(
+    event_type,
+    user_id=None,
+    listing_id=None,
+    search_query=None,
+):
     try:
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO analytics_events
-                        (user_id, event_type, listing_id)
-                    VALUES (%s, %s, %s)
+                        (user_id, event_type, listing_id, search_query)
+                    VALUES (%s, %s, %s, %s)
                     """,
-                    (user_id, event_type, listing_id),
+                    (user_id, event_type, listing_id, search_query),
                 )
             conn.commit()
     except Exception as e:
@@ -1267,6 +1308,37 @@ def get_analytics():
             )
             top_listings = cur.fetchall()
 
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS registered_users,
+                    COUNT(*) FILTER (
+                        WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '1 day'
+                    ) AS new_users_today,
+                    COUNT(*) FILTER (
+                        WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+                    ) AS new_users_7_days
+                FROM bot_users
+                """
+            )
+            user_stats = cur.fetchone()
+
+            cur.execute(
+                """
+                SELECT
+                    search_query,
+                    COUNT(*) AS search_count
+                FROM analytics_events
+                WHERE event_type = 'search'
+                  AND search_query IS NOT NULL
+                  AND TRIM(search_query) <> ''
+                GROUP BY search_query
+                ORDER BY search_count DESC, MAX(created_at) DESC
+                LIMIT 5
+                """
+            )
+            top_searches = cur.fetchall()
+
     return {
         "listing_views": row[0] or 0,
         "searches": row[1] or 0,
@@ -1274,6 +1346,10 @@ def get_analytics():
         "views_7_days": row[3] or 0,
         "searches_7_days": row[4] or 0,
         "top_listings": top_listings,
+        "registered_users": user_stats[0] or 0,
+        "new_users_today": user_stats[1] or 0,
+        "new_users_7_days": user_stats[2] or 0,
+        "top_searches": top_searches,
     }
 
 
@@ -1517,6 +1593,7 @@ def admin_region_menu(prefix):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clear_state(context)
+    register_user(update.effective_user)
 
     # Support shared listing deep links such as /start listing_123.
     if context.args:
@@ -2177,6 +2254,12 @@ async def button_handler(
         lines = [
             "📈 BOT ANALYTICS",
             "",
+            "👥 USER GROWTH",
+            f"👤 Registered Users: {stats['registered_users']}",
+            f"🆕 New Today: {stats['new_users_today']}",
+            f"📅 New Last 7 Days: {stats['new_users_7_days']}",
+            "",
+            "📊 ENGAGEMENT",
             f"👀 Total Listing Views: {stats['listing_views']}",
             f"🔎 Total Searches: {stats['searches']}",
             f"👥 Users Tracked: {stats['active_users']}",
@@ -2185,8 +2268,21 @@ async def button_handler(
             f"👀 Listing Views: {stats['views_7_days']}",
             f"🔎 Searches: {stats['searches_7_days']}",
             "",
-            "🏆 TOP 5 LISTINGS BY VIEWS",
+            "🔎 TOP 5 SEARCHES",
         ]
+
+        if stats["top_searches"]:
+            for position, (search_query, count) in enumerate(
+                stats["top_searches"], start=1
+            ):
+                lines.append(
+                    f"{position}. {search_query[:40]} — {count} search(es)"
+                )
+        else:
+            lines.append("No searches recorded yet.")
+
+        lines.append("")
+        lines.append("🏆 TOP 5 LISTINGS BY VIEWS")
 
         if stats["top_listings"]:
             for position, (listing_id, title, views) in enumerate(
@@ -2896,6 +2992,7 @@ async def text_input(
         track_analytics_event(
             "search",
             user_id=update.effective_user.id,
+            search_query=text,
         )
 
         try:
