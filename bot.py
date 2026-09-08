@@ -72,9 +72,6 @@ def init_database():
                     description TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-                            cur.execute(
-                "ALTER TABLE premium_requests ADD COLUMN IF NOT EXISTS mpesa_reference TEXT"
-            )
 """
             )
 
@@ -148,6 +145,9 @@ def init_database():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """
+            )
+            cur.execute(
+                "ALTER TABLE premium_requests ADD COLUMN IF NOT EXISTS mpesa_reference TEXT"
             )
 
         conn.commit()
