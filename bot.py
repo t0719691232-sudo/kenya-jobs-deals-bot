@@ -182,6 +182,18 @@ def init_database():
                 )
                 """
             )
+            cur.execute(
+                "ALTER TABLE bot_users ADD COLUMN IF NOT EXISTS referred_by BIGINT"
+            )
+            cur.execute(
+                "ALTER TABLE bot_users ADD COLUMN IF NOT EXISTS referral_code TEXT"
+            )
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_users_referral_code
+                ON bot_users(referral_code)
+                """
+            )
 
         conn.commit()
 
@@ -1250,6 +1262,12 @@ def main_menu():
         ],
         [
             InlineKeyboardButton(
+                "👥 Invite Friends",
+                callback_data="referrals",
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 "⭐ Premium",
                 callback_data="premium",
             )
@@ -1339,25 +1357,82 @@ def region_menu(category):
 # =========================================================
 
 
-def register_user(user):
+def register_user(user, referred_by=None):
     try:
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
+                    "SELECT user_id FROM bot_users WHERE user_id = %s",
+                    (user.id,),
+                )
+                existing = cur.fetchone()
+
+                if existing:
+                    cur.execute(
+                        """
+                        UPDATE bot_users
+                        SET username = %s,
+                            first_name = %s,
+                            last_seen = CURRENT_TIMESTAMP
+                        WHERE user_id = %s
+                        """,
+                        (user.username, user.first_name, user.id),
+                    )
+                    conn.commit()
+                    return False
+
+                referral_code = f"ref{user.id}"
+
+                cur.execute(
                     """
-                    INSERT INTO bot_users (user_id, username, first_name)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (user_id)
-                    DO UPDATE SET
-                        username = EXCLUDED.username,
-                        first_name = EXCLUDED.first_name,
-                        last_seen = CURRENT_TIMESTAMP
+                    INSERT INTO bot_users
+                        (user_id, username, first_name, referred_by, referral_code)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO NOTHING
                     """,
-                    (user.id, user.username, user.first_name),
+                    (
+                        user.id,
+                        user.username,
+                        user.first_name,
+                        referred_by,
+                        referral_code,
+                    ),
                 )
             conn.commit()
+            return True
+
     except Exception as e:
         print("User registration tracking error:", e)
+        return False
+
+
+def get_referral_stats(user_id):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT referral_code
+                FROM bot_users
+                WHERE user_id = %s
+                """,
+                (user_id,),
+            )
+            row = cur.fetchone()
+            referral_code = row[0] if row else f"ref{user_id}"
+
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM bot_users
+                WHERE referred_by = %s
+                """,
+                (user_id,),
+            )
+            referrals = cur.fetchone()[0] or 0
+
+    return referral_code, referrals
+
+
 
 
 def track_analytics_event(
@@ -1724,7 +1799,19 @@ def admin_region_menu(prefix):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clear_state(context)
-    register_user(update.effective_user)
+
+    referred_by = None
+    if context.args:
+        payload = context.args[0]
+        if payload.startswith("ref_"):
+            try:
+                candidate = int(payload.replace("ref_", "", 1))
+                if candidate != update.effective_user.id:
+                    referred_by = candidate
+            except ValueError:
+                referred_by = None
+
+    register_user(update.effective_user, referred_by=referred_by)
 
     # Support shared listing deep links such as /start listing_123.
     if context.args:
@@ -2246,6 +2333,35 @@ async def button_handler(
     # -----------------------------------------------------
     # PREMIUM
     # -----------------------------------------------------
+
+    if data == "referrals":
+        referral_code, referrals = get_referral_stats(user_id)
+
+        if BOT_USERNAME:
+            referral_link = f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
+        else:
+            referral_link = "Your referral link will be available after the bot username is detected."
+
+        await query.edit_message_text(
+            "👥 INVITE FRIENDS\n\n"
+            "Invite friends to Kenya Jobs & Deals Bot.\n\n"
+            f"🔗 Your referral link:\n{referral_link}\n\n"
+            f"👥 Successful referrals: {referrals}\n\n"
+            "Share your link with friends looking for jobs, gigs and deals.",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "📤 Share Invite",
+                        url=(
+                            f"https://t.me/share/url?url={quote(referral_link, safe='')}"
+                            f"&text={quote('Join Kenya Jobs & Deals Bot for jobs, gigs and deals in Kenya 🇰🇪', safe='')}"
+                        ),
+                    )
+                ],
+                [InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")],
+            ]),
+        )
+        return
 
     if data == "premium":
         listings = get_user_listings(user_id)
