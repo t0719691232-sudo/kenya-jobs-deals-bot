@@ -195,6 +195,17 @@ def init_database():
                 """
             )
 
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS alert_subscriptions (
+                    user_id BIGINT NOT NULL,
+                    category VARCHAR(50) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, category)
+                )
+                """
+            )
+
         conn.commit()
 
     print("Database ready.")
@@ -1268,6 +1279,12 @@ def main_menu():
         ],
         [
             InlineKeyboardButton(
+                "🔔 New Listing Alerts",
+                callback_data="alerts",
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 "⭐ Premium",
                 callback_data="premium",
             )
@@ -1791,6 +1808,123 @@ def admin_region_menu(prefix):
     ]
 
     return InlineKeyboardMarkup(keyboard)
+
+
+# =========================================================
+# USER ALERTS
+# =========================================================
+
+ALERT_CATEGORIES = [
+    ("jobs", "💼 Jobs"),
+    ("gigs", "💻 Online Gigs"),
+    ("business", "💰 Business"),
+    ("cars", "🚗 Car Deals"),
+    ("electronics", "📱 Electronics"),
+]
+
+
+def get_alert_subscriptions(user_id):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT category FROM alert_subscriptions WHERE user_id = %s",
+                (user_id,),
+            )
+            return {row[0] for row in cur.fetchall()}
+
+
+def toggle_alert_subscription(user_id, category):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM alert_subscriptions WHERE user_id = %s AND category = %s",
+                (user_id, category),
+            )
+            exists = cur.fetchone() is not None
+            if exists:
+                cur.execute(
+                    "DELETE FROM alert_subscriptions WHERE user_id = %s AND category = %s",
+                    (user_id, category),
+                )
+                enabled = False
+            else:
+                cur.execute(
+                    "INSERT INTO alert_subscriptions (user_id, category) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (user_id, category),
+                )
+                enabled = True
+        conn.commit()
+    return enabled
+
+
+def get_alert_subscribers(category):
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT user_id FROM alert_subscriptions WHERE category = %s",
+                (category,),
+            )
+            return [row[0] for row in cur.fetchall()]
+
+
+async def notify_new_listing(application, listing_id):
+    """Notify users who opted into the category of a new approved listing."""
+    try:
+        listing = get_listing(listing_id)
+        if not listing or listing[9] != "approved":
+            return
+        subscribers = get_alert_subscribers(listing[1])
+        for user_id in subscribers:
+            if user_id == ADMIN_ID:
+                continue
+            try:
+                await application.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        "🔔 NEW LISTING ALERT\n\n"
+                        f"{category_name(listing[1])}\n"
+                        f"📌 {listing[2]}\n"
+                        f"📍 {listing[3]}\n"
+                        f"💰 {listing[4]}\n\n"
+                        "A new listing matching your alert has just been added. 🇰🇪"
+                    ),
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("👀 View Listing", callback_data=f"alert_listing_{listing_id}")]
+                    ]),
+                )
+            except Exception as e:
+                print(f"Alert delivery error for user {user_id}:", e)
+    except Exception as e:
+        print("New listing alert error:", e)
+
+
+def alerts_menu_markup(user_id):
+    subscriptions = get_alert_subscriptions(user_id)
+    keyboard = []
+    for category, label in ALERT_CATEGORIES:
+        prefix = "✅ " if category in subscriptions else "⬜ "
+        keyboard.append([
+            InlineKeyboardButton(prefix + label, callback_data=f"alert_toggle_{category}")
+        ])
+    keyboard.append([InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")])
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def show_alerts(query, user_id):
+    subscriptions = get_alert_subscriptions(user_id)
+    selected = ", ".join(
+        label for category, label in ALERT_CATEGORIES if category in subscriptions
+    )
+    status = f"Currently subscribed to: {selected}" if selected else "You are not subscribed to any alerts yet."
+    await query.edit_message_text(
+        "🔔 NEW LISTING ALERTS\n\n"
+        "Choose the categories you want notifications for.\n"
+        "Whenever a new approved listing is added in a selected category, "
+        "the bot will send you an alert.\n\n"
+        f"{status}\n\n"
+        "Tap a category to turn alerts on or off.",
+        reply_markup=alerts_menu_markup(user_id),
+    )
 
 
 # =========================================================
@@ -2333,6 +2467,34 @@ async def button_handler(
     # -----------------------------------------------------
     # PREMIUM
     # -----------------------------------------------------
+
+    if data == "alerts":
+        clear_state(context)
+        await show_alerts(query, user_id)
+        return
+
+    if data.startswith("alert_toggle_"):
+        category = data.replace("alert_toggle_", "", 1)
+        if category not in {item[0] for item in ALERT_CATEGORIES}:
+            await query.message.reply_text("❌ Invalid alert category.")
+            return
+        enabled = toggle_alert_subscription(user_id, category)
+        await query.answer("Alerts turned on" if enabled else "Alerts turned off")
+        await show_alerts(query, user_id)
+        return
+
+    if data.startswith("alert_listing_"):
+        try:
+            listing_id = int(data.replace("alert_listing_", "", 1))
+        except ValueError:
+            await query.message.reply_text("❌ Invalid listing.")
+            return
+        listing = get_listing(listing_id)
+        if not listing or listing[9] != "approved":
+            await query.message.reply_text("❌ This listing is no longer available.")
+            return
+        await send_listing(query.message, listing, user_id)
+        return
 
     if data == "referrals":
         referral_code, referrals = get_referral_stats(user_id)
@@ -2891,6 +3053,8 @@ async def button_handler(
                 )
             except Exception as e:
                 print("Advertiser approval notification error:", e)
+
+        await notify_new_listing(context.application, listing_id)
 
         return
 
@@ -3705,6 +3869,8 @@ async def save_admin_listing(
         return
 
     clear_state(context)
+
+    await notify_new_listing(context.application, listing_id)
 
     await update.message.reply_text(
         f"✅ LISTING ADDED SUCCESSFULLY!\n\n"
