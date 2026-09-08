@@ -570,11 +570,11 @@ def normalize_phone_for_whatsapp(contact):
         return None
 
     # Use the first phone-like number when contact contains extra text.
-    match = re.search(r"(?:\\+?\\d[\\d\\s().-]{7,}\\d)", contact)
+    match = re.search(r"(?:\+?\d[\d\s().-]{7,}\d)", contact)
     if not match:
         return None
 
-    number = re.sub(r"\\D", "", match.group(0))
+    number = re.sub(r"\D", "", match.group(0))
 
     # Kenya local mobile format: 07xxxxxxxx / 01xxxxxxxx -> 2547xxxxxxxx / 2541xxxxxxxx.
     if number.startswith("0") and len(number) == 10:
