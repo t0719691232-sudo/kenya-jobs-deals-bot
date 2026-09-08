@@ -72,7 +72,10 @@ def init_database():
                     description TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-                """
+                            cur.execute(
+                "ALTER TABLE premium_requests ADD COLUMN IF NOT EXISTS mpesa_reference TEXT"
+            )
+"""
             )
 
             cur.execute(
@@ -140,6 +143,7 @@ def init_database():
                     listing_id INTEGER NOT NULL REFERENCES listings(id) ON DELETE CASCADE,
                     duration_days INTEGER NOT NULL,
                     price INTEGER NOT NULL,
+                    mpesa_reference TEXT,
                     status TEXT DEFAULT 'pending',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -662,6 +666,9 @@ def clear_state(context):
         "advertiser_region",
         "advertiser_data",
         "advertiser_photo",
+        "premium_listing_id",
+        "premium_duration_days",
+        "premium_waiting_receipt",
     ]
 
     for key in keys:
@@ -729,18 +736,18 @@ def get_user_listings(user_id):
             return cur.fetchall()
 
 
-def create_premium_request(user_id, listing_id, duration_days):
+def create_premium_request(user_id, listing_id, duration_days, mpesa_reference):
     price = PREMIUM_PRICES[duration_days]
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO premium_requests
-                    (user_id, listing_id, duration_days, price, status)
-                VALUES (%s, %s, %s, %s, 'pending')
+                    (user_id, listing_id, duration_days, price, mpesa_reference, status)
+                VALUES (%s, %s, %s, %s, %s, 'pending')
                 RETURNING id
                 """,
-                (user_id, listing_id, duration_days, price),
+                (user_id, listing_id, duration_days, price, mpesa_reference),
             )
             request_id = cur.fetchone()[0]
         conn.commit()
@@ -758,6 +765,7 @@ def get_pending_premium_requests():
                     pr.listing_id,
                     pr.duration_days,
                     pr.price,
+                    pr.mpesa_reference,
                     pr.status,
                     pr.created_at,
                     l.title,
@@ -1887,35 +1895,21 @@ async def button_handler(
             return
 
         price = PREMIUM_PRICES[duration_days]
-        request_id = create_premium_request(user_id, listing_id, duration_days)
 
-        try:
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=(
-                    "💎 PREMIUM REQUEST\n\n"
-                    f"Request #{request_id}\n"
-                    f"🆔 Listing #{listing_id}\n"
-                    f"📌 {listing[2]}\n"
-                    f"👤 User ID: {user_id}\n"
-                    f"📌 Duration: {duration_days} days\n"
-                    f"💰 Price: KSh {price}\n\n"
-                    "Confirm payment, then approve from /admin → Premium Requests."
-                ),
-            )
-        except Exception as e:
-            print("Premium admin notification error:", e)
+        context.user_data["premium_listing_id"] = listing_id
+        context.user_data["premium_duration_days"] = duration_days
+        context.user_data["premium_waiting_receipt"] = True
 
         await query.edit_message_text(
-            "💎 PREMIUM REQUEST SENT\n\n"
+            "💳 M-PESA PAYMENT\n\n"
             f"📌 Listing: {listing[2]}\n"
             f"⭐ Duration: {duration_days} days\n"
             f"💰 Amount: KSh {price}\n\n"
-            f"Payment: {PREMIUM_CONTACT}\n\n"
-            "After payment, admin will confirm and activate your Featured listing.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")]
-            ]),
+            f"Send KSh {price} to:\n"
+            f"📱 {PREMIUM_CONTACT}\n\n"
+            "After payment, send the M-Pesa transaction code here.\n"
+            "Example: QABC123XYZ\n\n"
+            "Your request will be sent to admin for payment verification."
         )
         return
 
@@ -1965,7 +1959,7 @@ async def button_handler(
         )
 
         for req in requests:
-            request_id, requester_id, listing_id, duration_days, price, status, created_at, title, category = req
+            request_id, requester_id, listing_id, duration_days, price, mpesa_reference, status, created_at, title, category = req
             buttons = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("✅ Approve", callback_data=f"premium_approve_{request_id}"),
@@ -1981,8 +1975,9 @@ async def button_handler(
                 f"👤 User ID: {requester_id}\n"
                 f"📌 Duration: {duration_days} days\n"
                 f"💰 Price: KSh {price}\n"
+                f"🧾 M-Pesa Reference: {mpesa_reference or 'Not provided'}\n"
                 f"🕐 Requested: {created_at}\n\n"
-                "Confirm payment before approving.",
+                "Verify the M-Pesa payment before approving.",
                 reply_markup=buttons,
             )
 
@@ -2463,6 +2458,83 @@ async def text_input(
     context: ContextTypes.DEFAULT_TYPE,
 ):
     text = update.message.text.strip()
+
+    # =====================================================
+    # PREMIUM M-PESA RECEIPT
+    # =====================================================
+
+    if context.user_data.get("premium_waiting_receipt"):
+        receipt = text.replace(" ", "").upper()
+
+        if not re.fullmatch(r"[A-Z0-9]{6,20}", receipt):
+            await update.message.reply_text(
+                "❌ Invalid M-Pesa transaction code.\n\n"
+                "Please send the transaction code only, using 6–20 letters/numbers.\n"
+                "Example: QABC123XYZ"
+            )
+            return
+
+        listing_id = context.user_data.get("premium_listing_id")
+        duration_days = context.user_data.get("premium_duration_days")
+
+        if not listing_id or duration_days not in PREMIUM_PRICES:
+            context.user_data.pop("premium_waiting_receipt", None)
+            await update.message.reply_text(
+                "❌ Your Premium payment session expired. Please start again from 💎 Premium."
+            )
+            return
+
+        listing = get_listing(listing_id)
+        if not listing or listing[9] != "approved" or listing[10] != update.effective_user.id:
+            clear_state(context)
+            await update.message.reply_text(
+                "❌ This listing is no longer available for your account.",
+                reply_markup=main_menu(),
+            )
+            return
+
+        price = PREMIUM_PRICES[duration_days]
+        request_id = create_premium_request(
+            update.effective_user.id,
+            listing_id,
+            duration_days,
+            receipt,
+        )
+
+        context.user_data.pop("premium_waiting_receipt", None)
+        context.user_data.pop("premium_listing_id", None)
+        context.user_data.pop("premium_duration_days", None)
+
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=(
+                    "💎 PREMIUM REQUEST\n\n"
+                    f"Request #{request_id}\n"
+                    f"🆔 Listing #{listing_id}\n"
+                    f"📌 {listing[2]}\n"
+                    f"👤 User ID: {update.effective_user.id}\n"
+                    f"📌 Duration: {duration_days} days\n"
+                    f"💰 Price: KSh {price}\n"
+                    f"🧾 M-Pesa Reference: {receipt}\n\n"
+                    "Verify the M-Pesa payment, then approve from "
+                    "/admin → Premium Requests."
+                ),
+            )
+        except Exception as e:
+            print("Premium admin notification error:", e)
+
+        await update.message.reply_text(
+            "💎 PREMIUM REQUEST SENT\n\n"
+            f"📌 Listing: {listing[2]}\n"
+            f"⭐ Duration: {duration_days} days\n"
+            f"💰 Amount: KSh {price}\n"
+            f"🧾 M-Pesa Reference: {receipt}\n\n"
+            "Your payment reference has been sent to admin for verification. "
+            "Once payment is confirmed, your Featured listing will be activated.",
+            reply_markup=main_menu(),
+        )
+        return
 
     # =====================================================
     # ADVERTISER SUBMISSION
