@@ -1,4 +1,5 @@
 import re
+import asyncio
 from urllib.parse import quote
 import os
 from datetime import datetime, timedelta
@@ -418,6 +419,47 @@ def get_listings(category, region=None):
                 )
 
             return cur.fetchall()
+
+
+# =========================================================
+# AUTOMATIC MAINTENANCE
+# =========================================================
+
+def cleanup_expired_featured():
+    """Remove the Featured flag from listings whose promotion has expired."""
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE listings
+                    SET featured = FALSE,
+                        featured_until = NULL
+                    WHERE featured = TRUE
+                      AND featured_until IS NOT NULL
+                      AND featured_until <= CURRENT_TIMESTAMP
+                    RETURNING id, title
+                    """
+                )
+                expired = cur.fetchall()
+            conn.commit()
+
+        if expired:
+            print(
+                f"Maintenance: removed Featured status from {len(expired)} expired listing(s)."
+            )
+
+        return expired
+    except Exception as e:
+        print("Maintenance cleanup error:", e)
+        return []
+
+
+async def automatic_maintenance():
+    """Run maintenance once at startup and then every hour."""
+    while True:
+        cleanup_expired_featured()
+        await asyncio.sleep(3600)
 
 
 # =========================================================
@@ -2321,6 +2363,35 @@ async def button_handler(
         )
         return
 
+    if data == "admin_maintenance":
+        expired = cleanup_expired_featured()
+
+        if expired:
+            details = "\n".join(
+                f"• #{listing_id} — {title}"
+                for listing_id, title in expired
+            )
+            message = (
+                "🧹 MAINTENANCE COMPLETE\n\n"
+                f"⭐ Expired Featured listings cleaned: {len(expired)}\n\n"
+                f"{details}"
+            )
+        else:
+            message = (
+                "🧹 MAINTENANCE COMPLETE\n\n"
+                "No expired Featured listings needed cleanup. ✅"
+            )
+
+        await query.edit_message_text(
+            message,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔔 Notifications", callback_data="admin_notifications")],
+                [InlineKeyboardButton("📊 Dashboard", callback_data="admin_dashboard")],
+                [InlineKeyboardButton("🔐 Admin Panel", callback_data="admin_menu")],
+            ]),
+        )
+        return
+
     if data == "admin_notifications":
         notifications = get_admin_notifications()
         pending_ads = notifications["pending_ads"]
@@ -2360,6 +2431,7 @@ async def button_handler(
             "\n".join(lines),
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Refresh", callback_data="admin_notifications")],
+                [InlineKeyboardButton("🧹 Run Maintenance", callback_data="admin_maintenance")],
                 [InlineKeyboardButton("📥 Pending Ads", callback_data="pending_ads")],
                 [InlineKeyboardButton("💎 Premium Requests", callback_data="premium_requests")],
                 [InlineKeyboardButton("🔐 Admin Panel", callback_data="admin_menu")],
@@ -2383,7 +2455,8 @@ async def button_handler(
             f"📋 Total Listings: {stats['total_listings']}\n"
             f"✅ Approved Listings: {stats['approved_listings']}\n"
             f"⏳ Pending Ads: {stats['pending_listings']}\n"
-            f"⭐ Active Featured: {stats['active_featured']}\n\n"
+            f"⭐ Active Featured: {stats['active_featured']}\n"
+            "🧹 Automatic maintenance: ON\n\n"
             f"💎 Pending Premium: {stats['pending_premium']}\n"
             f"🏆 Approved Premium: {stats['approved_premium']}\n"
             f"💰 Premium Revenue: KSh {stats['premium_revenue']:,}\n\n"
@@ -3728,6 +3801,11 @@ def main():
 
     # Prepare database
     init_database()
+
+    # Automatic maintenance: expire old Featured promotions.
+    asyncio.get_event_loop().create_task(
+        automatic_maintenance()
+    )
 
     # Render health server
     health_thread = threading.Thread(
