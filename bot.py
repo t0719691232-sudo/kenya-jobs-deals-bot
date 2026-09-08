@@ -1353,6 +1353,17 @@ def get_analytics():
     }
 
 
+def get_admin_notifications():
+    """Return pending counts and the latest pending items for the admin."""
+    pending_ads = get_pending_listings()
+    pending_premium = get_pending_premium_requests()
+
+    return {
+        "pending_ads": pending_ads,
+        "pending_premium": pending_premium,
+    }
+
+
 def get_admin_dashboard():
     """Return key business metrics for the admin dashboard."""
     with get_connection() as conn:
@@ -1435,6 +1446,12 @@ def admin_menu():
                 "📈 Analytics",
                 callback_data="admin_analytics",
             ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🔔 Notifications",
+                callback_data="admin_notifications",
+            )
         ],
         [
             InlineKeyboardButton(
@@ -2299,6 +2316,52 @@ async def button_handler(
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Refresh", callback_data="admin_analytics")],
                 [InlineKeyboardButton("📊 Dashboard", callback_data="admin_dashboard")],
+                [InlineKeyboardButton("🔐 Admin Panel", callback_data="admin_menu")],
+            ]),
+        )
+        return
+
+    if data == "admin_notifications":
+        notifications = get_admin_notifications()
+        pending_ads = notifications["pending_ads"]
+        pending_premium = notifications["pending_premium"]
+
+        lines = [
+            "🔔 ADMIN NOTIFICATIONS",
+            "",
+            f"📥 Pending Adverts: {len(pending_ads)}",
+            f"💎 Pending Premium Payments: {len(pending_premium)}",
+            "",
+            "📌 RECENT ITEMS",
+        ]
+
+        shown = 0
+
+        for listing in pending_ads[:5]:
+            lines.append(
+                f"📥 Advert #{listing[0]} — {listing[2]}"
+            )
+            shown += 1
+
+        for request in pending_premium[:5]:
+            request_id, requester_id, listing_id, duration_days, price, mpesa_reference, status, created_at, title, category = request
+            lines.append(
+                f"💎 Premium #{request_id} — #{listing_id} {title}"
+            )
+            lines.append(
+                f"   🧾 {mpesa_reference or 'No reference'} • KSh {price}"
+            )
+            shown += 1
+
+        if shown == 0:
+            lines.append("No pending items right now. ✅")
+
+        await query.edit_message_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Refresh", callback_data="admin_notifications")],
+                [InlineKeyboardButton("📥 Pending Ads", callback_data="pending_ads")],
+                [InlineKeyboardButton("💎 Premium Requests", callback_data="premium_requests")],
                 [InlineKeyboardButton("🔐 Admin Panel", callback_data="admin_menu")],
             ]),
         )
