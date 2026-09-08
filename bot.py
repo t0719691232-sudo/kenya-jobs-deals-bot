@@ -28,7 +28,7 @@ DATABASE_URL = os.environ["DATABASE_URL"].strip()
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "1773092768"))
 PORT = int(os.environ.get("PORT", 10000))
 BOT_USERNAME = ""
-PREMIUM_CONTACT = os.environ.get("PREMIUM_CONTACT", "Contact admin for payment details")
+PREMIUM_CONTACT = "M-Pesa: 0719691232 — Samuel Kimani"
 
 
 # =========================================================
@@ -1836,7 +1836,8 @@ async def button_handler(
             "📌 7 days — KSh 200\n"
             "📌 14 days — KSh 350\n"
             "📌 30 days — KSh 600\n\n"
-            "Payment is confirmed manually by admin.",
+            "Payment is confirmed manually by admin.\n\n"
+            f"💳 {PREMIUM_CONTACT}",
             reply_markup=InlineKeyboardMarkup(buttons),
         )
         return
