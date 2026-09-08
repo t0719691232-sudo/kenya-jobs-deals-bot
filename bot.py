@@ -354,7 +354,9 @@ def get_listings(category, region=None):
                         region,
                         photo,
                         status,
-                        user_id
+                        user_id,
+                        featured,
+                        featured_until
                     FROM listings
                     WHERE category = %s
                     AND region = %s
@@ -378,7 +380,9 @@ def get_listings(category, region=None):
                         region,
                         photo,
                         status,
-                        user_id
+                        user_id,
+                        featured,
+                        featured_until
                     FROM listings
                     WHERE category = %s
                     AND status = 'approved'
@@ -387,6 +391,40 @@ def get_listings(category, region=None):
                     (category,),
                 )
 
+            return cur.fetchall()
+
+
+# =========================================================
+# FEATURED LISTINGS
+# =========================================================
+
+def get_featured_listings():
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    category,
+                    title,
+                    location,
+                    price,
+                    contact,
+                    description,
+                    region,
+                    photo,
+                    status,
+                    user_id,
+                    featured,
+                    featured_until
+                FROM listings
+                WHERE status = 'approved'
+                  AND featured = TRUE
+                  AND (featured_until IS NULL OR featured_until > CURRENT_TIMESTAMP)
+                ORDER BY featured_until ASC NULLS LAST, id DESC
+                LIMIT 30
+                """
+            )
             return cur.fetchall()
 
 
@@ -1027,6 +1065,12 @@ def main_menu():
         ],
         [
             InlineKeyboardButton(
+                "⭐ Featured Listings",
+                callback_data="featured_listings",
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 "💼 Jobs",
                 callback_data="category_jobs",
             ),
@@ -1491,6 +1535,36 @@ async def button_handler(
     # -----------------------------------------------------
     # SEARCH
     # -----------------------------------------------------
+
+    if data == "featured_listings":
+        listings = get_featured_listings()
+
+        if not listings:
+            await query.edit_message_text(
+                "⭐ FEATURED LISTINGS\n\n"
+                "There are no Featured Listings available right now.",
+                reply_markup=main_menu(),
+            )
+            return
+
+        await query.edit_message_text(
+            "⭐ FEATURED LISTINGS\n\n"
+            f"Showing {len(listings)} promoted listing(s).\n\n"
+            "These listings are currently featured by advertisers."
+        )
+
+        for listing in listings:
+            await send_listing(
+                query.message,
+                listing,
+                user_id,
+            )
+
+        await query.message.reply_text(
+            "What would you like to do next?",
+            reply_markup=main_menu(),
+        )
+        return
 
     if data == "search":
         clear_state(context)
