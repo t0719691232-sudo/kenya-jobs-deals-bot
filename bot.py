@@ -131,6 +131,12 @@ def init_database():
                 ADD COLUMN IF NOT EXISTS featured_until TIMESTAMP
                 """
             )
+            cur.execute(
+                """
+                ALTER TABLE listings
+                ADD COLUMN IF NOT EXISTS featured_reminder_sent BOOLEAN DEFAULT FALSE
+                """
+            )
 
             # Manual premium requests. Admin approves after confirming payment.
             cur.execute(
@@ -434,7 +440,8 @@ def cleanup_expired_featured():
                     """
                     UPDATE listings
                     SET featured = FALSE,
-                        featured_until = NULL
+                        featured_until = NULL,
+                        featured_reminder_sent = FALSE
                     WHERE featured = TRUE
                       AND featured_until IS NOT NULL
                       AND featured_until <= CURRENT_TIMESTAMP
@@ -455,10 +462,73 @@ def cleanup_expired_featured():
         return []
 
 
-async def automatic_maintenance():
-    """Run maintenance once at startup and then every hour."""
+async def send_featured_expiry_reminders(application):
+    """Notify advertisers once when their Featured promotion has <=24 hours left."""
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, title, user_id, featured_until
+                    FROM listings
+                    WHERE status = 'approved'
+                      AND featured = TRUE
+                      AND featured_until IS NOT NULL
+                      AND featured_until > CURRENT_TIMESTAMP
+                      AND featured_until <= CURRENT_TIMESTAMP + INTERVAL '24 hours'
+                      AND COALESCE(featured_reminder_sent, FALSE) = FALSE
+                      AND user_id IS NOT NULL
+                    ORDER BY featured_until ASC
+                    """
+                )
+                rows = cur.fetchall()
+
+                for listing_id, title, user_id, featured_until in rows:
+                    try:
+                        await application.bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                "⏰ FEATURED LISTING EXPIRING SOON\n\n"
+                                f"📌 Listing #{listing_id}: {title}\n"
+                                f"⭐ Featured until: {featured_until}\n\n"
+                                "Your Featured promotion expires within 24 hours. "
+                                "Renew it to keep your listing promoted."
+                            ),
+                            reply_markup=InlineKeyboardMarkup([
+                                [
+                                    InlineKeyboardButton(
+                                        "💎 Renew Premium",
+                                        callback_data=f"premium_listing_{listing_id}",
+                                    )
+                                ]
+                            ]),
+                        )
+
+                        cur.execute(
+                            """
+                            UPDATE listings
+                            SET featured_reminder_sent = TRUE
+                            WHERE id = %s
+                            """,
+                            (listing_id,),
+                        )
+                    except Exception as e:
+                        print(
+                            f"Featured expiry reminder error for listing #{listing_id}:",
+                            e,
+                        )
+
+            conn.commit()
+
+    except Exception as e:
+        print("Featured expiry reminder query error:", e)
+
+
+async def automatic_maintenance(application):
+    """Run Featured cleanup and expiry reminders once at startup and every hour."""
     while True:
         cleanup_expired_featured()
+        await send_featured_expiry_reminders(application)
         await asyncio.sleep(3600)
 
 
@@ -921,7 +991,9 @@ def approve_premium_request(request_id):
             cur.execute(
                 """
                 UPDATE listings
-                SET featured = TRUE, featured_until = %s
+                SET featured = TRUE,
+                    featured_until = %s,
+                    featured_reminder_sent = FALSE
                 WHERE id = %s AND status = 'approved'
                 """,
                 (new_until, listing_id),
@@ -3819,7 +3891,7 @@ def main():
 
         # Start automatic Featured expiry maintenance on the bot's active event loop.
         application.create_task(
-            automatic_maintenance(),
+            automatic_maintenance(application),
             name="automatic-maintenance",
         )
         print("Automatic maintenance started.")
