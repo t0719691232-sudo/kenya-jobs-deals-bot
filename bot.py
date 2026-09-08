@@ -149,6 +149,17 @@ def init_database():
             cur.execute(
                 "ALTER TABLE premium_requests ADD COLUMN IF NOT EXISTS mpesa_reference TEXT"
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS analytics_events (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT,
+                    event_type TEXT NOT NULL,
+                    listing_id INTEGER REFERENCES listings(id) ON DELETE CASCADE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
 
         conn.commit()
 
@@ -1014,6 +1025,13 @@ def listing_buttons(row, user_id=None):
 
 
 async def send_listing(message, row, user_id=None):
+    if user_id and user_id != ADMIN_ID:
+        track_analytics_event(
+            "listing_view",
+            user_id=user_id,
+            listing_id=row[0],
+        )
+
     text = format_listing(row)
     photo = row[8]
     buttons = listing_buttons(row, user_id)
@@ -1192,6 +1210,73 @@ def region_menu(category):
 # =========================================================
 
 
+def track_analytics_event(event_type, user_id=None, listing_id=None):
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO analytics_events
+                        (user_id, event_type, listing_id)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (user_id, event_type, listing_id),
+                )
+            conn.commit()
+    except Exception as e:
+        print("Analytics tracking error:", e)
+
+
+def get_analytics():
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE event_type = 'listing_view') AS listing_views,
+                    COUNT(*) FILTER (WHERE event_type = 'search') AS searches,
+                    COUNT(DISTINCT user_id) FILTER (WHERE user_id IS NOT NULL) AS active_users,
+                    COUNT(*) FILTER (
+                        WHERE event_type = 'listing_view'
+                          AND created_at >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+                    ) AS views_7_days,
+                    COUNT(*) FILTER (
+                        WHERE event_type = 'search'
+                          AND created_at >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+                    ) AS searches_7_days
+                FROM analytics_events
+                """
+            )
+            row = cur.fetchone()
+
+            cur.execute(
+                """
+                SELECT
+                    l.id,
+                    l.title,
+                    COUNT(a.id) AS views
+                FROM listings l
+                LEFT JOIN analytics_events a
+                    ON a.listing_id = l.id
+                   AND a.event_type = 'listing_view'
+                WHERE l.status = 'approved'
+                GROUP BY l.id, l.title
+                ORDER BY views DESC, l.id DESC
+                LIMIT 5
+                """
+            )
+            top_listings = cur.fetchall()
+
+    return {
+        "listing_views": row[0] or 0,
+        "searches": row[1] or 0,
+        "active_users": row[2] or 0,
+        "views_7_days": row[3] or 0,
+        "searches_7_days": row[4] or 0,
+        "top_listings": top_listings,
+    }
+
+
 def get_admin_dashboard():
     """Return key business metrics for the admin dashboard."""
     with get_connection() as conn:
@@ -1271,9 +1356,15 @@ def admin_menu():
                 callback_data="admin_dashboard",
             ),
             InlineKeyboardButton(
+                "📈 Analytics",
+                callback_data="admin_analytics",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
                 "💎 Premium Requests",
                 callback_data="premium_requests",
-            ),
+            )
         ],
         [
             InlineKeyboardButton(
@@ -2080,6 +2171,43 @@ async def button_handler(
     # PREMIUM REQUESTS
     # -----------------------------------------------------
 
+    if data == "admin_analytics":
+        stats = get_analytics()
+
+        lines = [
+            "📈 BOT ANALYTICS",
+            "",
+            f"👀 Total Listing Views: {stats['listing_views']}",
+            f"🔎 Total Searches: {stats['searches']}",
+            f"👥 Users Tracked: {stats['active_users']}",
+            "",
+            "📅 LAST 7 DAYS",
+            f"👀 Listing Views: {stats['views_7_days']}",
+            f"🔎 Searches: {stats['searches_7_days']}",
+            "",
+            "🏆 TOP 5 LISTINGS BY VIEWS",
+        ]
+
+        if stats["top_listings"]:
+            for position, (listing_id, title, views) in enumerate(
+                stats["top_listings"], start=1
+            ):
+                lines.append(
+                    f"{position}. #{listing_id} {title[:35]} — {views} view(s)"
+                )
+        else:
+            lines.append("No listing views recorded yet.")
+
+        await query.edit_message_text(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Refresh", callback_data="admin_analytics")],
+                [InlineKeyboardButton("📊 Dashboard", callback_data="admin_dashboard")],
+                [InlineKeyboardButton("🔐 Admin Panel", callback_data="admin_menu")],
+            ]),
+        )
+        return
+
     if data == "admin_menu":
         await query.edit_message_text(
             "🔐 ADMIN PANEL",
@@ -2763,6 +2891,11 @@ async def text_input(
         context.user_data.pop(
             "searching",
             None,
+        )
+
+        track_analytics_event(
+            "search",
+            user_id=update.effective_user.id,
         )
 
         try:
